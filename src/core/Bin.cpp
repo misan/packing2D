@@ -129,9 +129,17 @@ Bin::Placement Bin::findWhereToPlace(const MArea& piece, bool useParallel) {
     };
 
     if (useParallel && !g_parallelism_disabled_for_tests) {
+#if __cpp_lib_parallel_algorithm >= 201603L
+        // Use parallel algorithm if supported (C++17 and later)
         std::vector<int> indices(freeRectangles.size());
         std::iota(indices.begin(), indices.end(), 0);
         std::for_each(std::execution::par, indices.begin(), indices.end(), checkPlacement);
+#else
+        // Fallback to sequential if parallel algorithms are not supported
+        for (int i = static_cast<int>(freeRectangles.size()) - 1; i >= 0; --i) {
+            checkPlacement(i);
+        }
+#endif
     } else {
         for (int i = static_cast<int>(freeRectangles.size()) - 1; i >= 0; --i) {
             checkPlacement(i);
@@ -242,10 +250,16 @@ void Bin::compress(bool useParallel) {
             std::iota(indices.begin(), indices.end(), 0);
 
             // Parallel calculation of new positions
+#if __cpp_lib_parallel_algorithm >= 201603L
             std::for_each(std::execution::par, indices.begin(), indices.end(),
                 [&](size_t i) {
                     did_move[i] = compressPiece_parallel_helper(next_placed_pieces[i], i);
                 });
+#else
+            for (size_t i = 0; i < indices.size(); ++i) {
+                did_move[i] = compressPiece_parallel_helper(next_placed_pieces[i], indices[i]);
+            }
+#endif
 
             // Check if any piece moved in this pass
             if (std::any_of(did_move.begin(), did_move.end(), [](bool v){ return v; })) {
