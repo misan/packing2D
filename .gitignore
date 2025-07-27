@@ -1,0 +1,17 @@
+# Executables
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+
+# Build directories
+build/
+bin/
+obj/
+dist/
+
+# Specific binary files (if you know their names)
+myprogram
+myprogram.exe
