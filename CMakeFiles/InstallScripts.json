@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/misan/packing2D/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

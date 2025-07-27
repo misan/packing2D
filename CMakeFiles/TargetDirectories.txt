@@ -1,0 +1,7 @@
+/home/misan/packing2D/CMakeFiles/packing_lib.dir
+/home/misan/packing2D/CMakeFiles/packing_main.dir
+/home/misan/packing2D/CMakeFiles/packing_py.dir
+/home/misan/packing2D/CMakeFiles/packing_tests.dir
+/home/misan/packing2D/CMakeFiles/test.dir
+/home/misan/packing2D/CMakeFiles/edit_cache.dir
+/home/misan/packing2D/CMakeFiles/rebuild_cache.dir
