@@ -3,6 +3,11 @@ project(Packing2D_CPP)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+if(APPLE)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -stdlib=libc++ -D_LIBCPP_ENABLE_PARALLEL_ALGORITHMS")
+endif()
 
 # --- Dependencies ---
 # Find Boost, which is required for geometric operations.
@@ -38,7 +43,7 @@ target_link_libraries(packing_lib PUBLIC Boost::headers TBB::tbb)
 # --- Executable ---
 # This creates the main executable to run the packing process from the command line.
 add_executable(packing_main src/main.cpp)
-target_link_libraries(packing_main PRIVATE packing_lib)
+target_link_libraries(packing_main PRIVATE packing_lib TBB::tbb)
 
 
 # --- Python Bindings (Future Work) ---
