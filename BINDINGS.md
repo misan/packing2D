@@ -18,14 +18,7 @@ This will produce a Python module file in the `build/` directory. On Windows, th
 
 ## 2. Using the Module in Python
 
-To use the module, you must ensure it is in Python's path. The simplest way to do this for local development is to append the `build/` directory to `sys.path`, as shown in `test.py`:
-
-```python
-import sys
-# Make sure the module can be found
-sys.path.append('./build') 
-import packing_py
-```
+To use the module, you must ensure it is in Python's path. The simplest way to do this for local development is to append the `build/` directory to `sys.path`.
 
 ### Core Workflow
 
@@ -36,18 +29,18 @@ The typical workflow involves three main steps:
 
 ### Example Usage
 
-The following example demonstrates the complete process, from loading data to inspecting the output.
+The following example demonstrates the complete process, from loading data to inspecting the output. For better readability, it imports the necessary classes and functions directly from the module.
 
 ```python
-import packing_py
 import sys
+from packing_py import load_pieces, pack
 
 # Add the build directory to the path
 sys.path.append('./build')
 
 # 1. Load pieces and bin dimensions from a file
 # The file format is the same as the one used by the C++ executable.
-problem = packing_py.load_pieces("samples/S266.txt")
+problem = load_pieces("samples/S266.txt")
 
 if not problem:
     print("Failed to load the specified file.")
@@ -60,7 +53,7 @@ print(f"Bin dimensions are: {problem.bin_dimension.width} x {problem.bin_dimensi
 # The function takes the list of pieces and the bin dimension.
 # It returns a list of Bin objects, each populated with placed pieces.
 print("\nStarting the packing process...")
-bins = packing_py.pack(problem.pieces, problem.bin_dimension)
+bins = pack(problem.pieces, problem.bin_dimension)
 print(f"Packing complete. The algorithm used {len(bins)} bins.")
 
 # 3. Inspect the results
