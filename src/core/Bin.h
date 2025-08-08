@@ -108,7 +108,6 @@ private:
     std::vector<MArea> placedPieces;
     std::vector<Rectangle2D> freeRectangles;
     RTree placedPiecesRTree; // The new spatial index
-    mutable std::mutex collisionMutex; // To protect isCollision
 
     /**
      * @brief Checks if a given piece collides with any of the already placed pieces.

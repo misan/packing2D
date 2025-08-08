@@ -66,7 +66,6 @@ double Bin::getEmptyArea() const {
 }
 
 bool Bin::isCollision(const MArea& piece, std::optional<size_t> ignoredPieceIndex) {
-    std::lock_guard<std::mutex> lock(collisionMutex);
     // 1. Broad phase: Query the R-tree to find pieces whose bounding boxes intersect with the new piece's bounding box.
     std::vector<RTreeValue> candidates;
     placedPiecesRTree.query(boost::geometry::index::intersects(piece.getBoundingBox2D()), std::back_inserter(candidates));
@@ -128,7 +127,7 @@ Bin::Placement Bin::findWhereToPlace(const MArea& piece, bool useParallel) {
         }
     };
 
-    if (useParallel && !g_parallelism_disabled_for_tests) {
+    if (useParallel && !g_parallelism_disabled_for_tests && freeRectangles.size() > 250) {
 #if __cpp_lib_parallel_algorithm >= 201603L
         // Use parallel algorithm if supported (C++17 and later)
         std::vector<int> indices(freeRectangles.size());
@@ -240,49 +239,12 @@ void Bin::compress(bool useParallel) {
         return;
     }
 
-    if (useParallel && !g_parallelism_disabled_for_tests) {
-        bool moved_in_pass = true;
-        while (moved_in_pass) {
-            std::vector<MArea> next_placed_pieces = placedPieces;
-            std::vector<bool> did_move(placedPieces.size(), false);
-
-            std::vector<size_t> indices(placedPieces.size());
-            std::iota(indices.begin(), indices.end(), 0);
-
-            // Parallel calculation of new positions
-#if __cpp_lib_parallel_algorithm >= 201603L
-            std::for_each(std::execution::par, indices.begin(), indices.end(),
-                [&](size_t i) {
-                    did_move[i] = compressPiece_parallel_helper(next_placed_pieces[i], i);
-                });
-#else
-            for (size_t i = 0; i < indices.size(); ++i) {
-                did_move[i] = compressPiece_parallel_helper(next_placed_pieces[i], indices[i]);
-            }
-#endif
-
-            // Check if any piece moved in this pass
-            if (std::any_of(did_move.begin(), did_move.end(), [](bool v){ return v; })) {
+    bool moved_in_pass = true;
+    while (moved_in_pass) {
+        moved_in_pass = false;
+        for (size_t i = 0; i < placedPieces.size(); ++i) {
+            if (compressPiece(i, MVector(-1.0, -1.0))) {
                 moved_in_pass = true;
-                placedPieces = next_placed_pieces;
-
-                // Rebuild R-tree
-                placedPiecesRTree.clear();
-                for (size_t i = 0; i < placedPieces.size(); ++i) {
-                    placedPiecesRTree.insert({placedPieces[i].getBoundingBox2D(), i});
-                }
-            } else {
-                moved_in_pass = false;
-            }
-        }
-    } else { // Sequential version
-        bool moved_in_pass = true;
-        while (moved_in_pass) {
-            moved_in_pass = false;
-            for (size_t i = 0; i < placedPieces.size(); ++i) {
-                if (compressPiece(i, MVector(-1.0, -1.0))) {
-                    moved_in_pass = true;
-                }
             }
         }
     }
