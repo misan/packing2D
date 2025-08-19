@@ -7,3 +7,5 @@ I have tested this code on an M1 Mac and in Ubuntu Linux.
 Some of the features, such as parallel execution, ended up working more slowly than the sequential one, though in some cases, they manage to create a better packing. Just know it is not any faster.
 
 *Code depends on pybind11, Boost, TBB, and Google Test libraries*.
+
+*The free_space branch does improve packing, so it will be more efficient (but slower) than the master branch.*
