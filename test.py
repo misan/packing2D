@@ -8,7 +8,7 @@ sys.path.append('./build')
 print("--- Testing Python Bindings ---")
 
 # 1. Load the problem from the same file format
-problem = packing_py.load_pieces("samples/S266.txt")
+problem = packing_py.load_pieces("samples/S24.txt")
 
 if not problem:
     print("Failed to load file.")
