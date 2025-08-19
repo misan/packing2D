@@ -11,11 +11,24 @@ from shapely.geometry import Polygon
 import numpy as np
 
 from shapely.ops import nearest_points
-
+"""
 def get_radius(polygon, point):
     boundary = polygon.boundary
     nearest = nearest_points(point, boundary)[1]
     return point.distance(nearest)
+"""
+def get_radius(polygon, point):
+    try:
+        boundary = polygon.boundary
+        if not boundary.is_valid or boundary.is_empty:
+            return 0
+        nearest = nearest_points(point, boundary)[1]
+        distance = point.distance(nearest)
+        return distance if np.isfinite(distance) and distance > 0 else 0
+    except Exception as e:
+        print(f"Warning: Error calculating radius: {e}")
+        return 0
+
 
 def get_center_offsets(canvas, text, font_name="Helvetica", font_size=12):
     """
@@ -47,9 +60,9 @@ def get_center_offsets(canvas, text, font_name="Helvetica", font_size=12):
 from shapely.geometry import Polygon, MultiPolygon, Point
 from shapely.ops import nearest_points
 import numpy as np
-
+"""
 def most_inland_point(polygon_points, step=0.1):
-    """
+    ""
     Finds the most inland point of a polygon and the diameter of the largest circle
     that can fit inside it using negative buffers and distance-to-boundary check.
     This is an approximation method.
@@ -60,7 +73,7 @@ def most_inland_point(polygon_points, step=0.1):
 
     Returns:
         (tuple, float): (most inland point coordinates), diameter of largest circle.
-    """
+    ""
     polygon = Polygon(polygon_points)
     if not polygon.is_valid:
         polygon = polygon.buffer(0)
@@ -95,9 +108,72 @@ def most_inland_point(polygon_points, step=0.1):
     radius = inland_point.distance(nearest)
 
     return (inland_point.x, inland_point.y), radius * 2
+"""
 
+def most_inland_point(polygon_points, step=0.1):
+    """
+    Finds the most inland point of a polygon and the diameter of the largest circle
+    that can fit inside it using negative buffers and distance-to-boundary check.
+    This is an approximation method.
 
+    Args:
+        polygon_points (list of tuples): Points defining the polygon.
+        step (float): Step size for shrinking (smaller = more accurate).
 
+    Returns:
+        (tuple, float): (most inland point coordinates), diameter of largest circle.
+    """
+    polygon = Polygon(polygon_points)
+    if not polygon.is_valid:
+        polygon = polygon.buffer(0)
+    
+    if polygon.is_empty:
+        return (0, 0), 0
+    
+    # Determine a reasonable search range for the radius based on the polygon's bounds.
+    min_x, min_y, max_x, max_y = polygon.bounds
+    max_possible_radius = max(max_x - min_x, max_y - min_y) / 2.0
+    
+    last_valid_shrunken_polygon = polygon
+    
+    # Iteratively shrink the polygon to find the most "inland" area.
+    for r in np.arange(step, max_possible_radius + step, step):
+        shrunken = polygon.buffer(-r)
+        
+        if shrunken.is_empty:
+            break
+            
+        if isinstance(shrunken, MultiPolygon):
+            shrunken = max(shrunken.geoms, key=lambda p: p.area)
+        
+        # Additional validation to ensure the shrunken polygon is valid
+        if not shrunken.is_valid or shrunken.area <= 0:
+            break
+            
+        last_valid_shrunken_polygon = shrunken
+    
+    # Use representative_point, which is guaranteed to be inside the polygon.
+    # Centroid can fall outside for non-convex polygons.
+    inland_point = last_valid_shrunken_polygon.representative_point()
+    
+    # The radius of the inscribed circle at this point is its distance to the boundary.
+    try:
+        # Check if the boundary is valid before computing nearest points
+        if not polygon.boundary.is_valid or polygon.boundary.is_empty:
+            return (inland_point.x, inland_point.y), 0
+            
+        nearest = nearest_points(inland_point, polygon.boundary)[1]
+        radius = inland_point.distance(nearest)
+        
+        # Check if the radius is a valid number
+        if not np.isfinite(radius) or radius <= 0:
+            return (inland_point.x, inland_point.y), 0
+            
+        return (inland_point.x, inland_point.y), radius * 2
+    except Exception as e:
+        # If any error occurs during distance calculation, return a safe default
+        print(f"Warning: Error calculating inland point distance: {e}")
+        return (inland_point.x, inland_point.y), 0
 
 def parse_problem_file(file_path):
     """
@@ -412,6 +488,7 @@ def main():
     print("--- Visualizing Nesting with PDF Output (Precise Transformations) ---")
     
     input_file = "samples/S266.txt"
+    if len(sys.argv)>1: input_file=sys.argv[1]
 
     # 1. Parse the problem file to get original vertices for drawing.
     bin_dimension, original_pieces_vertices = parse_problem_file(input_file)
