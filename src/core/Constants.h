@@ -29,6 +29,6 @@ constexpr int DY_SWEEP_FACTOR = 2;
 /**
  * @brief The vector of angles to try when placing a piece.
  */
-constexpr std::array<int, 2> ROTATION_ANGLES = {0, 90};
+constexpr std::array<int, 8> ROTATION_ANGLES = {0, 45, 90, 135, 180, 225, 270, 315};
 
 } // namespace Constants

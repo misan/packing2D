@@ -168,6 +168,49 @@ private:
      * @return An optional containing the placed piece if successful, otherwise std::nullopt.
      */
     std::optional<MArea> sweep(const MArea& container, MArea inside, size_t ignoredPieceIndex);
+
+    /**
+     * @brief Detects joint free spaces between multiple placed parts.
+     * These are non-rectangular spaces that form when multiple parts are nested together,
+     * potentially allowing larger pieces to be placed than would fit in individual rectangular free spaces.
+     * @return A vector of MArea objects representing the detected joint free spaces.
+     */
+    std::vector<MArea> detectJointFreeSpaces();
+
+    /**
+     * @brief Tries to place a piece in one of the detected joint free spaces.
+     * @param piece The piece to place.
+     * @param useParallel If true, the placement will be done in parallel.
+     * @return An optional containing the placed piece if successful, otherwise std::nullopt.
+     */
+    std::optional<MArea> tryPlaceInJointSpace(const MArea& piece, bool useParallel);
+
+private:
+    /**
+     * @brief Computes the total free space in the bin as a single MArea.
+     * This is done by subtracting all placed pieces from the bin's area.
+     * @return An MArea representing the total free space.
+     */
+    MArea computeTotalFreeSpace() const;
+
+    /**
+     * @brief Decomposes a complex free space into simpler, potentially placeable regions.
+     * @param freeSpace The complex free space to decompose.
+     * @return A vector of simpler MArea objects.
+     */
+    std::vector<MArea> decomposeFreeSpace(const MArea& freeSpace) const;
+
+    /**
+     * @brief Checks if a piece can be placed within a joint free space.
+     * @param piece The piece to place.
+     * @param jointSpace The joint free space to check.
+     * @param useParallel If true, the check will be done in parallel.
+     * @return An optional containing the placed piece if successful, otherwise std::nullopt.
+     */
+    std::optional<MArea> checkPlacementInJointSpace(const MArea& piece, const MArea& jointSpace, bool useParallel);
+
+    std::vector<MArea> jointFreeSpaces; // Cache for detected joint free spaces
+    bool jointSpacesDirty; // Flag to indicate if joint spaces need recalculation
 };
 
 namespace TestUtils {

@@ -16,7 +16,7 @@ namespace TestUtils {
     }
 }
 
-Bin::Bin(const Rectangle2D& dimension) : dimension(dimension) {
+Bin::Bin(const Rectangle2D& dimension) : dimension(dimension), jointSpacesDirty(true) {
     freeRectangles.push_back(dimension);
 }
 
@@ -24,7 +24,9 @@ Bin::Bin(const Bin& other) :
     dimension(other.dimension),
     placedPieces(other.placedPieces),
     freeRectangles(other.freeRectangles),
-    placedPiecesRTree(other.placedPiecesRTree)
+    placedPiecesRTree(other.placedPiecesRTree),
+    jointFreeSpaces(other.jointFreeSpaces),
+    jointSpacesDirty(other.jointSpacesDirty)
     // collisionMutex is not copied, a new one is default-initialized.
 {
 }
@@ -37,6 +39,8 @@ Bin& Bin::operator=(const Bin& other) {
     placedPieces = other.placedPieces;
     freeRectangles = other.freeRectangles;
     placedPiecesRTree = other.placedPiecesRTree;
+    jointFreeSpaces = other.jointFreeSpaces;
+    jointSpacesDirty = other.jointSpacesDirty;
     // collisionMutex is not copied.
     return *this;
 }
@@ -98,7 +102,32 @@ Bin::Placement Bin::findWhereToPlace(const MArea& piece, bool useParallel) {
     Rectangle2D pieceBB = piece.getBoundingBox2D();
     std::mutex mtx;
 
-    auto checkPlacement = [&](int i) {
+    // Optimization: Pre-filter free rectangles to only consider those that could potentially fit the piece
+    // This is especially useful when there are many small free rectangles
+    double pieceArea = RectangleUtils::getWidth(pieceBB) * RectangleUtils::getHeight(pieceBB);
+    std::vector<size_t> candidateIndices;
+    candidateIndices.reserve(freeRectangles.size());
+    
+    for (size_t i = 0; i < freeRectangles.size(); ++i) {
+        const auto& freeRect = freeRectangles[i];
+        double freeRectArea = RectangleUtils::getWidth(freeRect) * RectangleUtils::getHeight(freeRect);
+        
+        // Quick area check - if the free rectangle is smaller than the piece, skip it
+        if (freeRectArea < pieceArea * 0.9) { // Allow a small margin for rotation
+            continue;
+        }
+        
+        // More detailed check for dimensions
+        if (RectangleUtils::getWidth(freeRect) >= RectangleUtils::getWidth(pieceBB) &&
+            RectangleUtils::getHeight(freeRect) >= RectangleUtils::getHeight(pieceBB)) {
+            candidateIndices.push_back(i);
+        } else if (RectangleUtils::getWidth(freeRect) >= RectangleUtils::getHeight(pieceBB) &&
+                  RectangleUtils::getHeight(freeRect) >= RectangleUtils::getWidth(pieceBB)) {
+            candidateIndices.push_back(i);
+        }
+    }
+
+    auto checkPlacement = [&](size_t i) {
         const auto& freeRect = freeRectangles[i];
         if (RectangleUtils::fits(pieceBB, freeRect)) {
             double wastage = std::min(
@@ -108,7 +137,7 @@ Bin::Placement Bin::findWhereToPlace(const MArea& piece, bool useParallel) {
             std::lock_guard<std::mutex> lock(mtx);
             if (wastage < minWastage) {
                 minWastage = wastage;
-                bestPlacement.rectIndex = i;
+                bestPlacement.rectIndex = static_cast<int>(i);
                 bestPlacement.requiresRotation = false;
             }
         }
@@ -121,27 +150,26 @@ Bin::Placement Bin::findWhereToPlace(const MArea& piece, bool useParallel) {
             std::lock_guard<std::mutex> lock(mtx);
             if (wastage < minWastage) {
                 minWastage = wastage;
-                bestPlacement.rectIndex = i;
+                bestPlacement.rectIndex = static_cast<int>(i);
                 bestPlacement.requiresRotation = true;
             }
         }
     };
 
-    if (useParallel && !g_parallelism_disabled_for_tests && freeRectangles.size() > 250) {
+    if (useParallel && !g_parallelism_disabled_for_tests && candidateIndices.size() > 250) {
 #if __cpp_lib_parallel_algorithm >= 201603L
         // Use parallel algorithm if supported (C++17 and later)
-        std::vector<int> indices(freeRectangles.size());
-        std::iota(indices.begin(), indices.end(), 0);
-        std::for_each(std::execution::par, indices.begin(), indices.end(), checkPlacement);
+        std::for_each(std::execution::par, candidateIndices.begin(), candidateIndices.end(), checkPlacement);
 #else
         // Fallback to sequential if parallel algorithms are not supported
-        for (int i = static_cast<int>(freeRectangles.size()) - 1; i >= 0; --i) {
-            checkPlacement(i);
+        for (auto it = candidateIndices.rbegin(); it != candidateIndices.rend(); ++it) {
+            checkPlacement(*it);
         }
 #endif
     } else {
-        for (int i = static_cast<int>(freeRectangles.size()) - 1; i >= 0; --i) {
-            checkPlacement(i);
+        // Iterate in reverse order to prioritize newer free rectangles
+        for (auto it = candidateIndices.rbegin(); it != candidateIndices.rend(); ++it) {
+            checkPlacement(*it);
         }
     }
 
@@ -156,6 +184,9 @@ std::vector<MArea> Bin::boundingBoxPacking(std::vector<MArea>& piecesToPlace, bo
     });
 
     for (const auto& piece : piecesToPlace) {
+        bool piecePlaced = false;
+        
+        // First, try the traditional rectangular placement
         Placement placement = findWhereToPlace(piece, useParallel);
 
         if (placement.rectIndex != -1) {
@@ -175,10 +206,21 @@ std::vector<MArea> Bin::boundingBoxPacking(std::vector<MArea>& piecesToPlace, bo
 
                 placedPieces.push_back(placedPiece);
                 placedPiecesRTree.insert({pieceBB, placedPieces.size() - 1});
-            } else {
-                notPlacedPieces.push_back(piece);
+                piecePlaced = true;
+                
+                // Mark joint spaces as dirty since we've added a new piece
+                jointSpacesDirty = true;
             }
-        } else {
+        }
+        
+        // If rectangular placement failed, try placing in joint free spaces
+        if (!piecePlaced) {
+            if (auto placedPiece = tryPlaceInJointSpace(piece, useParallel)) {
+                piecePlaced = true;
+            }
+        }
+        
+        if (!piecePlaced) {
             notPlacedPieces.push_back(piece);
         }
     }
@@ -188,50 +230,108 @@ std::vector<MArea> Bin::boundingBoxPacking(std::vector<MArea>& piecesToPlace, bo
 void Bin::computeFreeRectangles(const Rectangle2D& justPlacedPieceBB) {
     std::vector<Rectangle2D> nextFreeRectangles;
     const double epsilon = 1e-9;
+    
+    // Reserve space to avoid reallocations
+    nextFreeRectangles.reserve(freeRectangles.size() * 2); // Worst case: each rectangle splits into 4
 
     for (const auto& freeR : freeRectangles) {
         if (!RectangleUtils::intersects(freeR, justPlacedPieceBB)) {
             nextFreeRectangles.push_back(freeR);
         } else {
             Rectangle2D rIntersection = RectangleUtils::createIntersection(freeR, justPlacedPieceBB);
-            double topHeight = RectangleUtils::getMaxY(freeR) - RectangleUtils::getMaxY(rIntersection);
+            
+            // Pre-calculate coordinates to avoid repeated function calls
+            double freeR_x = RectangleUtils::getX(freeR);
+            double freeR_y = RectangleUtils::getY(freeR);
+            double freeR_maxX = RectangleUtils::getMaxX(freeR);
+            double freeR_maxY = RectangleUtils::getMaxY(freeR);
+            double rIntersection_x = RectangleUtils::getX(rIntersection);
+            double rIntersection_y = RectangleUtils::getY(rIntersection);
+            double rIntersection_maxX = RectangleUtils::getMaxX(rIntersection);
+            double rIntersection_maxY = RectangleUtils::getMaxY(rIntersection);
+            
+            // Create rectangles only if they have significant area
+            double topHeight = freeR_maxY - rIntersection_maxY;
             if (topHeight > epsilon) {
-                nextFreeRectangles.emplace_back(MPointDouble(RectangleUtils::getX(freeR), RectangleUtils::getMaxY(rIntersection)), MPointDouble(RectangleUtils::getMaxX(freeR), RectangleUtils::getMaxY(freeR)));
+                double topWidth = freeR_maxX - freeR_x;
+                if (topWidth * topHeight > epsilon) { // Only add if area is significant
+                    nextFreeRectangles.emplace_back(MPointDouble(freeR_x, rIntersection_maxY), MPointDouble(freeR_maxX, freeR_maxY));
+                }
             }
-            double bottomHeight = RectangleUtils::getY(rIntersection) - RectangleUtils::getY(freeR);
+            
+            double bottomHeight = rIntersection_y - freeR_y;
             if (bottomHeight > epsilon) {
-                nextFreeRectangles.emplace_back(MPointDouble(RectangleUtils::getX(freeR), RectangleUtils::getY(freeR)), MPointDouble(RectangleUtils::getMaxX(freeR), RectangleUtils::getY(rIntersection)));
+                double bottomWidth = freeR_maxX - freeR_x;
+                if (bottomWidth * bottomHeight > epsilon) { // Only add if area is significant
+                    nextFreeRectangles.emplace_back(MPointDouble(freeR_x, freeR_y), MPointDouble(freeR_maxX, rIntersection_y));
+                }
             }
-            double leftWidth = RectangleUtils::getX(rIntersection) - RectangleUtils::getX(freeR);
+            
+            double leftWidth = rIntersection_x - freeR_x;
             if (leftWidth > epsilon) {
-                nextFreeRectangles.emplace_back(MPointDouble(RectangleUtils::getX(freeR), RectangleUtils::getY(freeR)), MPointDouble(RectangleUtils::getX(rIntersection), RectangleUtils::getMaxY(freeR)));
+                double leftHeight = freeR_maxY - freeR_y;
+                if (leftWidth * leftHeight > epsilon) { // Only add if area is significant
+                    nextFreeRectangles.emplace_back(MPointDouble(freeR_x, freeR_y), MPointDouble(rIntersection_x, freeR_maxY));
+                }
             }
-            double rightWidth = RectangleUtils::getMaxX(freeR) - RectangleUtils::getMaxX(rIntersection);
+            
+            double rightWidth = freeR_maxX - rIntersection_maxX;
             if (rightWidth > epsilon) {
-                nextFreeRectangles.emplace_back(MPointDouble(RectangleUtils::getMaxX(rIntersection), RectangleUtils::getY(freeR)), MPointDouble(RectangleUtils::getMaxX(freeR), RectangleUtils::getMaxY(freeR)));
+                double rightHeight = freeR_maxY - freeR_y;
+                if (rightWidth * rightHeight > epsilon) { // Only add if area is significant
+                    nextFreeRectangles.emplace_back(MPointDouble(rIntersection_maxX, freeR_y), MPointDouble(freeR_maxX, freeR_maxY));
+                }
             }
         }
     }
-    freeRectangles = nextFreeRectangles;
+    
+    // Use move assignment to avoid copying
+    freeRectangles = std::move(nextFreeRectangles);
+    
+    // Mark joint spaces as dirty since free rectangles have changed
+    jointSpacesDirty = true;
 }
 
 void Bin::eliminateNonMaximal() {
-    std::sort(freeRectangles.begin(), freeRectangles.end(), [](const Rectangle2D& a, const Rectangle2D& b) {
-        return (RectangleUtils::getWidth(a) * RectangleUtils::getHeight(a)) > (RectangleUtils::getWidth(b) * RectangleUtils::getHeight(b));
-    });
-
     auto& rects = freeRectangles;
     if (rects.size() < 2) return;
 
-    auto new_end = std::remove_if(rects.begin(), rects.end(),
-        [&](const Rectangle2D& r1) {
-            return std::any_of(rects.begin(), rects.end(),
-                [&](const Rectangle2D& r2) {
-                    return (&r1 != &r2) && RectangleUtils::contains(r2, r1);
-                });
-        });
+    // Sort by area in descending order - largest rectangles first
+    std::sort(rects.begin(), rects.end(), [](const Rectangle2D& a, const Rectangle2D& b) {
+        double areaA = RectangleUtils::getWidth(a) * RectangleUtils::getHeight(a);
+        double areaB = RectangleUtils::getWidth(b) * RectangleUtils::getHeight(b);
+        return areaA > areaB;
+    });
 
-    rects.erase(new_end, rects.end());
+    // Use a more efficient algorithm: only check smaller rectangles against larger ones
+    std::vector<bool> toRemove(rects.size(), false);
+    
+    for (size_t i = 0; i < rects.size(); ++i) {
+        if (toRemove[i]) continue;
+        
+        for (size_t j = i + 1; j < rects.size(); ++j) {
+            if (toRemove[j]) continue;
+            
+            // Since rects are sorted by area (descending), rects[i] is larger than rects[j]
+            // So we only need to check if rects[i] contains rects[j]
+            if (RectangleUtils::contains(rects[i], rects[j])) {
+                toRemove[j] = true;
+            }
+        }
+    }
+    
+    // Remove marked rectangles
+    size_t write_idx = 0;
+    for (size_t i = 0; i < rects.size(); ++i) {
+        if (!toRemove[i]) {
+            if (write_idx != i) {
+                rects[write_idx] = rects[i];
+            }
+            write_idx++;
+        }
+    }
+    
+    rects.resize(write_idx);
 }
 
 void Bin::compress(bool useParallel) {
@@ -292,6 +392,11 @@ bool Bin::compressPiece(size_t pieceIndex, const MVector& vector) {
     // Add the piece back to the R-tree in its new final position.
     placedPiecesRTree.insert({pieceToMove.getBoundingBox2D(), pieceIndex});
 
+    // If the piece was moved, mark joint spaces as dirty
+    if (total_moves > 0) {
+        jointSpacesDirty = true;
+    }
+
     return total_moves > 0;
 }
 
@@ -342,6 +447,8 @@ std::vector<MArea> Bin::dropPieces(const std::vector<MArea>& piecesToDrop, bool 
                 placedPieces.push_back(*placedPiece);
                 placedPiecesRTree.insert({placedPiece->getBoundingBox2D(), placedPieces.size() - 1});
                 wasPlaced = true;
+                // Mark joint spaces as dirty since we've added a new piece
+                jointSpacesDirty = true;
                 break;
             }
         }
@@ -415,6 +522,8 @@ bool Bin::moveAndReplace(size_t indexLimit) {
                     computeFreeRectangles(swept->getBoundingBox2D());
                     eliminateNonMaximal();
                     movement = true;
+                    // Mark joint spaces as dirty since we've moved a piece
+                    jointSpacesDirty = true;
                     goto next_piece; // Break outer loop and continue with next piece
                 }
 
@@ -429,6 +538,8 @@ bool Bin::moveAndReplace(size_t indexLimit) {
                     computeFreeRectangles(swept->getBoundingBox2D());
                     eliminateNonMaximal();
                     movement = true;
+                    // Mark joint spaces as dirty since we've moved a piece
+                    jointSpacesDirty = true;
                     goto next_piece;
                 }
             }
@@ -473,5 +584,263 @@ std::optional<MArea> Bin::sweep(const MArea& container, MArea inside, size_t ign
         }
     }
 
+    return std::nullopt;
+}
+
+MArea Bin::computeTotalFreeSpace() const {
+    if (placedPieces.empty()) {
+        // Create an MArea representing the entire bin
+        std::vector<MPointDouble> binPoints = {
+            MPointDouble(RectangleUtils::getX(dimension), RectangleUtils::getY(dimension)),
+            MPointDouble(RectangleUtils::getMaxX(dimension), RectangleUtils::getY(dimension)),
+            MPointDouble(RectangleUtils::getMaxX(dimension), RectangleUtils::getMaxY(dimension)),
+            MPointDouble(RectangleUtils::getX(dimension), RectangleUtils::getMaxY(dimension))
+        };
+        return MArea(binPoints, 0);
+    }
+
+    // Start with the bin as the initial free space
+    std::vector<MPointDouble> binPoints = {
+        MPointDouble(RectangleUtils::getX(dimension), RectangleUtils::getY(dimension)),
+        MPointDouble(RectangleUtils::getMaxX(dimension), RectangleUtils::getY(dimension)),
+        MPointDouble(RectangleUtils::getMaxX(dimension), RectangleUtils::getMaxY(dimension)),
+        MPointDouble(RectangleUtils::getX(dimension), RectangleUtils::getMaxY(dimension))
+    };
+    MArea totalFreeSpace(binPoints, 0);
+
+    // Reduced optimization: Only skip extremely small pieces that have negligible impact
+    // This ensures we maintain accuracy in joint space detection
+    double totalArea = RectangleUtils::getWidth(dimension) * RectangleUtils::getHeight(dimension);
+    double minSignificantArea = totalArea * 0.0001; // Reduced threshold from 0.1% to 0.01%
+    
+    // Subtract significant placed pieces from the free space
+    for (const auto& piece : placedPieces) {
+        if (piece.getArea() >= minSignificantArea) {
+            totalFreeSpace.subtract(piece);
+        }
+    }
+
+    return totalFreeSpace;
+}
+
+std::vector<MArea> Bin::decomposeFreeSpace(const MArea& freeSpace) const {
+    std::vector<MArea> decomposedSpaces;
+    
+    if (freeSpace.isEmpty()) {
+        return decomposedSpaces;
+    }
+
+    // Get the bounding box of the free space
+    Rectangle2D bbox = freeSpace.getBoundingBox2D();
+    
+    // Create a rectangular area representing the bounding box
+    std::vector<MPointDouble> bboxPoints = {
+        MPointDouble(RectangleUtils::getX(bbox), RectangleUtils::getY(bbox)),
+        MPointDouble(RectangleUtils::getMaxX(bbox), RectangleUtils::getY(bbox)),
+        MPointDouble(RectangleUtils::getMaxX(bbox), RectangleUtils::getMaxY(bbox)),
+        MPointDouble(RectangleUtils::getX(bbox), RectangleUtils::getMaxY(bbox))
+    };
+    MArea bboxArea(bboxPoints, 0);
+    
+    // Subtract the actual free space from its bounding box to get the "occupied" parts
+    MArea occupiedParts = bboxArea;
+    occupiedParts.subtract(freeSpace);
+    
+    // If the free space is already rectangular, return it as is
+    if (occupiedParts.isEmpty()) {
+        decomposedSpaces.push_back(freeSpace);
+        return decomposedSpaces;
+    }
+    
+    // For complex free spaces, we'll use a simple decomposition strategy:
+    // Divide the space into smaller rectangular regions based on the vertices
+    // of the occupied parts
+    
+    // This is a simplified approach - in a more sophisticated implementation,
+    // we might use more advanced decomposition algorithms
+    
+    // For now, we'll return the original free space as a single region
+    // The actual placement logic will handle fitting pieces into this space
+    decomposedSpaces.push_back(freeSpace);
+    
+    return decomposedSpaces;
+}
+
+std::vector<MArea> Bin::detectJointFreeSpaces() {
+    if (!jointSpacesDirty) {
+        return jointFreeSpaces;
+    }
+
+    std::vector<MArea> jointSpaces;
+    
+    if (placedPieces.size() < 2) {
+        // Need at least 2 pieces to form joint spaces
+        jointSpacesDirty = false;
+        jointFreeSpaces = jointSpaces;
+        return jointSpaces;
+    }
+
+    // Only compute joint spaces if we have a significant number of pieces
+    // This is an expensive operation, so we limit its frequency
+    static size_t lastPieceCount = 0;
+    if (placedPieces.size() - lastPieceCount < 3 && !jointFreeSpaces.empty()) {
+        // If we haven't added many pieces since last computation, reuse existing spaces
+        // Reduced threshold from 5 to 3 to be more responsive
+        jointSpacesDirty = false;
+        return jointFreeSpaces;
+    }
+    lastPieceCount = placedPieces.size();
+
+    // Compute the total free space only if necessary
+    MArea totalFreeSpace = computeTotalFreeSpace();
+    
+    if (totalFreeSpace.isEmpty()) {
+        jointSpacesDirty = false;
+        jointFreeSpaces = jointSpaces;
+        return jointSpaces;
+    }
+
+    // Decompose the free space into simpler regions
+    std::vector<MArea> decomposedSpaces = decomposeFreeSpace(totalFreeSpace);
+    
+    // Filter out spaces that are too small to be useful
+    // Use a dynamic threshold based on the average piece size, but make it less aggressive
+    double avgPieceArea = 0.0;
+    if (!placedPieces.empty()) {
+        avgPieceArea = std::accumulate(placedPieces.begin(), placedPieces.end(), 0.0,
+            [](double sum, const MArea& piece) { return sum + piece.getArea(); }) / placedPieces.size();
+    }
+    // Reduced threshold from 10% to 5% of average piece area to capture more joint spaces
+    const double minAreaThreshold = std::max(5.0, avgPieceArea * 0.05);
+    
+    // Reserve space to avoid reallocations
+    jointSpaces.reserve(decomposedSpaces.size());
+    
+    for (const auto& space : decomposedSpaces) {
+        if (space.getArea() >= minAreaThreshold) {
+            jointSpaces.push_back(space);
+        }
+    }
+    
+    // Use move assignment to avoid copying
+    jointSpacesDirty = false;
+    jointFreeSpaces = std::move(jointSpaces);
+    return jointFreeSpaces;
+}
+
+std::optional<MArea> Bin::checkPlacementInJointSpace(const MArea& piece, const MArea& jointSpace, bool useParallel) {
+    if (jointSpace.isEmpty() || piece.isEmpty()) {
+        return std::nullopt;
+    }
+
+    // Get the bounding box of the joint space
+    Rectangle2D jointSpaceBBox = jointSpace.getBoundingBox2D();
+    Rectangle2D pieceBBox = piece.getBoundingBox2D();
+    
+    // Quick check: if the piece's bounding box doesn't fit in the joint space's bounding box,
+    // it definitely won't fit in the joint space
+    if (!RectangleUtils::fits(pieceBBox, jointSpaceBBox) && !RectangleUtils::fitsRotated(pieceBBox, jointSpaceBBox)) {
+        return std::nullopt;
+    }
+
+    // Try to place the piece at different positions within the joint space
+    // We'll use a grid-based approach to sample potential positions
+    
+    // Use the original step size to maintain packing efficiency
+    const double stepSize = std::min(RectangleUtils::getWidth(pieceBBox), RectangleUtils::getHeight(pieceBBox)) / 4.0;
+    const double minX = RectangleUtils::getX(jointSpaceBBox);
+    const double maxX = RectangleUtils::getMaxX(jointSpaceBBox) - RectangleUtils::getWidth(pieceBBox);
+    const double minY = RectangleUtils::getY(jointSpaceBBox);
+    const double maxY = RectangleUtils::getMaxY(jointSpaceBBox) - RectangleUtils::getHeight(pieceBBox);
+    
+    // Pre-calculate bounds to avoid repeated function calls
+    const double pieceArea = piece.getArea();
+    const double jointSpaceArea = jointSpace.getArea();
+    
+    // Try without rotation first
+    for (double x = minX; x <= maxX; x += stepSize) {
+        for (double y = minY; y <= maxY; y += stepSize) {
+            MArea candidate = piece;
+            candidate.placeInPosition(x, y);
+            
+            // Quick bounding box check first
+            if (!candidate.isInside(dimension)) {
+                continue;
+            }
+            
+            // More expensive collision check only if bounding box check passes
+            if (isCollision(candidate)) {
+                continue;
+            }
+            
+            // Check if the candidate is contained within the joint space
+            MArea tempJointSpace = jointSpace;
+            tempJointSpace.subtract(candidate);
+            if (tempJointSpace.getArea() < jointSpaceArea - pieceArea + 1e-6) {
+                return candidate;
+            }
+        }
+    }
+    
+    // Try with rotation
+    MArea rotatedPiece = piece;
+    rotatedPiece.rotate(90);
+    Rectangle2D rotatedBBox = rotatedPiece.getBoundingBox2D();
+    
+    const double minXRot = RectangleUtils::getX(jointSpaceBBox);
+    const double maxXRot = RectangleUtils::getMaxX(jointSpaceBBox) - RectangleUtils::getWidth(rotatedBBox);
+    const double minYRot = RectangleUtils::getY(jointSpaceBBox);
+    const double maxYRot = RectangleUtils::getMaxY(jointSpaceBBox) - RectangleUtils::getHeight(rotatedBBox);
+    
+    for (double x = minXRot; x <= maxXRot; x += stepSize) {
+        for (double y = minYRot; y <= maxYRot; y += stepSize) {
+            MArea candidate = piece;
+            candidate.rotate(90);
+            candidate.placeInPosition(x, y);
+            
+            // Quick bounding box check first
+            if (!candidate.isInside(dimension)) {
+                continue;
+            }
+            
+            // More expensive collision check only if bounding box check passes
+            if (isCollision(candidate)) {
+                continue;
+            }
+            
+            // Check if the candidate is contained within the joint space
+            MArea tempJointSpace = jointSpace;
+            tempJointSpace.subtract(candidate);
+            if (tempJointSpace.getArea() < jointSpaceArea - pieceArea + 1e-6) {
+                return candidate;
+            }
+        }
+    }
+    
+    return std::nullopt;
+}
+
+std::optional<MArea> Bin::tryPlaceInJointSpace(const MArea& piece, bool useParallel) {
+    // Detect joint free spaces
+    std::vector<MArea> jointSpaces = detectJointFreeSpaces();
+    
+    // Try to place the piece in each joint space
+    for (const auto& jointSpace : jointSpaces) {
+        if (auto placedPiece = checkPlacementInJointSpace(piece, jointSpace, useParallel)) {
+            // If successful, update the bin state
+            placedPieces.push_back(*placedPiece);
+            placedPiecesRTree.insert({placedPiece->getBoundingBox2D(), placedPieces.size() - 1});
+            
+            // Mark joint spaces as dirty since we've added a new piece
+            jointSpacesDirty = true;
+            
+            // Update the rectangular free spaces as well
+            computeFreeRectangles(placedPiece->getBoundingBox2D());
+            eliminateNonMaximal();
+            
+            return placedPiece;
+        }
+    }
+    
     return std::nullopt;
 }

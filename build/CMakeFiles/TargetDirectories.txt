@@ -1,0 +1,7 @@
+/home/misan/Dropbox/soft/test_nest_IA/zai/packing2D/build/CMakeFiles/packing_lib.dir
+/home/misan/Dropbox/soft/test_nest_IA/zai/packing2D/build/CMakeFiles/packing_main.dir
+/home/misan/Dropbox/soft/test_nest_IA/zai/packing2D/build/CMakeFiles/packing_py.dir
+/home/misan/Dropbox/soft/test_nest_IA/zai/packing2D/build/CMakeFiles/packing_tests.dir
+/home/misan/Dropbox/soft/test_nest_IA/zai/packing2D/build/CMakeFiles/test.dir
+/home/misan/Dropbox/soft/test_nest_IA/zai/packing2D/build/CMakeFiles/edit_cache.dir
+/home/misan/Dropbox/soft/test_nest_IA/zai/packing2D/build/CMakeFiles/rebuild_cache.dir

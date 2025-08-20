@@ -1,0 +1,5 @@
+if(EXISTS "/home/misan/Dropbox/soft/test_nest_IA/zai/packing2D/build/packing_tests[1]_tests.cmake")
+  include("/home/misan/Dropbox/soft/test_nest_IA/zai/packing2D/build/packing_tests[1]_tests.cmake")
+else()
+  add_test(packing_tests_NOT_BUILT packing_tests_NOT_BUILT)
+endif()

@@ -1,11 +1,11 @@
-import packing_py
+print("Script starting...")
 import sys
-
 # Add the build directory to the path so Python can find the module
 # This is a simple way for testing; for distribution, you'd install the module.
 sys.path.append('./build')
+import packing_py
 
-print("--- Testing Python Bindings ---")
+print("-- Testing Python Bindings --")
 
 # 1. Load the problem from the same file format
 problem = packing_py.load_pieces("samples/S266.txt")
