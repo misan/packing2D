@@ -27,5 +27,14 @@ std::vector<Bin> pack(std::vector<MArea>& pieces, const Rectangle2D& binDimensio
  */
 std::vector<Bin> pack_ordered(std::vector<MArea>& pieces, const Rectangle2D& binDimension, bool useParallel);
 
+/**
+ * @brief A faster, simplified packing function for use in optimization algorithms.
+ *
+ * @param pieces The pieces to be packed, in the desired order.
+ * @param binDimension The dimensions of the bins to use.
+ * @return A vector of Bins, each containing the pieces placed within it.
+ */
+std::vector<Bin> pack_fast(std::vector<MArea>& pieces, const Rectangle2D& binDimension);
+
 } // namespace BinPacking
 

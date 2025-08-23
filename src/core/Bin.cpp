@@ -18,6 +18,7 @@ namespace TestUtils {
 
 Bin::Bin(const Rectangle2D& dimension) : dimension(dimension), jointSpacesDirty(true) {
     freeRectangles.push_back(dimension);
+    freeRectanglesRTree.insert({dimension, 0}); // Initialize R-tree with the bin dimension
 }
 
 Bin::Bin(const Bin& other) :
@@ -102,33 +103,14 @@ Bin::Placement Bin::findWhereToPlace(const MArea& piece, bool useParallel) {
     Rectangle2D pieceBB = piece.getBoundingBox2D();
     std::mutex mtx;
 
-    // Optimization: Pre-filter free rectangles to only consider those that could potentially fit the piece
-    // This is especially useful when there are many small free rectangles
-    double pieceArea = RectangleUtils::getWidth(pieceBB) * RectangleUtils::getHeight(pieceBB);
-    std::vector<size_t> candidateIndices;
-    candidateIndices.reserve(freeRectangles.size());
-    
-    for (size_t i = 0; i < freeRectangles.size(); ++i) {
-        const auto& freeRect = freeRectangles[i];
-        double freeRectArea = RectangleUtils::getWidth(freeRect) * RectangleUtils::getHeight(freeRect);
-        
-        // Quick area check - if the free rectangle is smaller than the piece, skip it
-        if (freeRectArea < pieceArea * 0.9) { // Allow a small margin for rotation
-            continue;
-        }
-        
-        // More detailed check for dimensions
-        if (RectangleUtils::getWidth(freeRect) >= RectangleUtils::getWidth(pieceBB) &&
-            RectangleUtils::getHeight(freeRect) >= RectangleUtils::getHeight(pieceBB)) {
-            candidateIndices.push_back(i);
-        } else if (RectangleUtils::getWidth(freeRect) >= RectangleUtils::getHeight(pieceBB) &&
-                  RectangleUtils::getHeight(freeRect) >= RectangleUtils::getWidth(pieceBB)) {
-            candidateIndices.push_back(i);
-        }
-    }
+    // Query the R-tree for free rectangles that intersect with the piece's bounding box
+    std::vector<RTreeValue> candidateRects;
+    freeRectanglesRTree.query(boost::geometry::index::intersects(pieceBB), std::back_inserter(candidateRects));
 
-    auto checkPlacement = [&](size_t i) {
-        const auto& freeRect = freeRectangles[i];
+    auto checkPlacement = [&](const RTreeValue& rtreeValue) {
+        const auto& freeRect = rtreeValue.first;
+        size_t i = rtreeValue.second;
+
         if (RectangleUtils::fits(pieceBB, freeRect)) {
             double wastage = std::min(
                 RectangleUtils::getWidth(freeRect) - RectangleUtils::getWidth(pieceBB),
@@ -156,21 +138,10 @@ Bin::Placement Bin::findWhereToPlace(const MArea& piece, bool useParallel) {
         }
     };
 
-    if (useParallel && !g_parallelism_disabled_for_tests && candidateIndices.size() > 250) {
-#if __cpp_lib_parallel_algorithm >= 201603L
-        // Use parallel algorithm if supported (C++17 and later)
-        std::for_each(std::execution::par, candidateIndices.begin(), candidateIndices.end(), checkPlacement);
-#else
-        // Fallback to sequential if parallel algorithms are not supported
-        for (auto it = candidateIndices.rbegin(); it != candidateIndices.rend(); ++it) {
-            checkPlacement(*it);
-        }
-#endif
-    } else {
-        // Iterate in reverse order to prioritize newer free rectangles
-        for (auto it = candidateIndices.rbegin(); it != candidateIndices.rend(); ++it) {
-            checkPlacement(*it);
-        }
+    // No need for parallel execution here, as the R-tree query is already fast.
+    // The number of candidateRects should be small.
+    for (const auto& rtreeValue : candidateRects) {
+        checkPlacement(rtreeValue);
     }
 
     return bestPlacement;
@@ -287,6 +258,12 @@ void Bin::computeFreeRectangles(const Rectangle2D& justPlacedPieceBB) {
     
     // Use move assignment to avoid copying
     freeRectangles = std::move(nextFreeRectangles);
+
+    // Update R-tree for free rectangles
+    freeRectanglesRTree.clear();
+    for (size_t i = 0; i < freeRectangles.size(); ++i) {
+        freeRectanglesRTree.insert({freeRectangles[i], i});
+    }
     
     // Mark joint spaces as dirty since free rectangles have changed
     jointSpacesDirty = true;
@@ -332,6 +309,12 @@ void Bin::eliminateNonMaximal() {
     }
     
     rects.resize(write_idx);
+
+    // Rebuild R-tree for free rectangles
+    freeRectanglesRTree.clear();
+    for (size_t i = 0; i < rects.size(); ++i) {
+        freeRectanglesRTree.insert({rects[i], i});
+    }
 }
 
 void Bin::compress(bool useParallel) {

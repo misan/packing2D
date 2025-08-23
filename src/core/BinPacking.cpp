@@ -140,4 +140,33 @@ std::vector<Bin> pack_ordered(std::vector<MArea>& pieces, const Rectangle2D& bin
     return bins;
 }
 
+std::vector<Bin> pack_fast(std::vector<MArea>& pieces, const Rectangle2D& binDimension) {
+    std::vector<Bin> bins;
+    std::vector<MArea> toPlace = pieces;
+
+    while (!toPlace.empty()) {
+        bins.emplace_back(binDimension);
+        Bin& currentBin = bins.back();
+        size_t nPiecesBefore = currentBin.getNPlaced();
+
+        std::vector<MArea> stillNotPlaced = currentBin.boundingBoxPacking(toPlace, false);
+
+        // Stage 3: Final compression and drop pass to fill any remaining gaps.
+        currentBin.compress(false);
+        if (!stillNotPlaced.empty()) {
+            stillNotPlaced = currentBin.dropPieces(stillNotPlaced, false);
+        }
+        currentBin.compress(false);
+
+        if (currentBin.getNPlaced() == nPiecesBefore) {
+            bins.pop_back();
+            break;
+        }
+
+        toPlace = stillNotPlaced;
+    }
+
+    return bins;
+}
+
 } // namespace BinPacking

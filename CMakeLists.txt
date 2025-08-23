@@ -38,6 +38,7 @@ add_library(packing_lib STATIC
     src/core/Bin.cpp
     src/core/BinPacking.cpp
     src/core/GeneticOptimizer.cpp
+    src/core/SimulatedAnnealingOptimizer.cpp
 )
 set_target_properties(packing_lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
 

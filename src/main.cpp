@@ -1,6 +1,7 @@
 #include "core/Bin.h"
 #include "core/BinPacking.h"
 #include "core/GeneticOptimizer.h"
+#include "core/SimulatedAnnealingOptimizer.h"
 #include "utils/Utils.h"
 #include <iostream>
 #include <fstream>
@@ -22,6 +23,7 @@ int main(int argc, char* argv[]) {
     std::vector<std::string> args(argv + 1, argv + argc);
     bool useParallel = false;
     bool useGeneticAlgorithm = false;
+    bool useSimulatedAnnealing = false;
     std::string fileName;
 
     for (const auto& arg : args) {
@@ -29,6 +31,8 @@ int main(int argc, char* argv[]) {
             useParallel = true;
         } else if (arg == "--ga" || arg == "--genetic") {
             useGeneticAlgorithm = true;
+        } else if (arg == "--sa" || arg == "--simulated-annealing") {
+            useSimulatedAnnealing = true;
         } else {
             fileName = arg;
         }
@@ -65,6 +69,10 @@ int main(int argc, char* argv[]) {
         std::cout << "Using Genetic Algorithm for optimization." << std::endl;
         BinPacking::GeneticOptimizer ga(loadResult->pieces, loadResult->binDimension, useParallel);
         bins = ga.run();
+    } else if (useSimulatedAnnealing) {
+        std::cout << "Using Simulated Annealing for optimization." << std::endl;
+        BinPacking::SimulatedAnnealingOptimizer sa(loadResult->pieces, loadResult->binDimension, useParallel);
+        bins = sa.run();
     } else {
         bins = BinPacking::pack(loadResult->pieces, loadResult->binDimension, useParallel);
     }
@@ -110,9 +118,10 @@ void printUsage() {
     std::cout << std::endl;
     std::cout << "Usage:" << std::endl;
     std::cout << std::endl;
-    std::cout << "$ ./packing_main [--parallel] [--ga | --genetic] <file name>" << std::endl;
+    std::cout << "$ ./packing_main [--parallel] [--ga | --genetic] [--sa | --simulated-annealing] <file name>" << std::endl;
     std::cout << "  --parallel      : (Optional) Run the packing algorithm using a parallel implementation." << std::endl;
     std::cout << "  --ga, --genetic : (Optional) Use the Genetic Algorithm to find a better packing solution." << std::endl;
+    std::cout << "  --sa, --simulated-annealing : (Optional) Use Simulated Annealing to find a better packing solution." << std::endl;
     std::cout << "  <file name>     : file describing pieces (see file structure specifications below)." << std::endl;
     std::cout << std::endl;
     std::cout << "The input pieces file should be structured as follows: " << std::endl;
