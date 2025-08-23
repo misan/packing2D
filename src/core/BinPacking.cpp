@@ -75,4 +75,69 @@ std::vector<Bin> pack(std::vector<MArea>& pieces, const Rectangle2D& binDimensio
     return bins;
 }
 
+std::vector<Bin> pack_ordered(std::vector<MArea>& pieces, const Rectangle2D& binDimension, bool useParallel) {
+    std::vector<Bin> bins;
+
+    // This version does not sort the pieces, it respects the given order.
+    std::vector<MArea> toPlace = pieces;
+    size_t lastLoopUnplacedCount = 0; // For infinite loop detection
+
+    while (!toPlace.empty()) {
+        // *** INFINITE LOOP GUARD ***
+        if (lastLoopUnplacedCount > 0 && toPlace.size() == lastLoopUnplacedCount) {
+            std::cerr << "Error: Infinite loop detected in pack_ordered. "
+                      << "The number of unplaced pieces (" << toPlace.size()
+                      << ") did not decrease. Aborting." << std::endl;
+            break;
+        }
+        lastLoopUnplacedCount = toPlace.size();
+
+        bins.emplace_back(binDimension);
+        Bin& currentBin = bins.back();
+        size_t nPiecesBefore = currentBin.getNPlaced();
+
+        // Stage 1: Initial packing using bounding boxes.
+        std::vector<MArea> stillNotPlaced = currentBin.boundingBoxPacking(toPlace, useParallel);
+
+        // Stage 2: Iteratively optimize and repack.
+        if (currentBin.getNPlaced() > nPiecesBefore) {
+            while (true) {
+                size_t piecesInBinBeforeRepack = currentBin.getNPlaced();
+
+                // Try to optimize the layout by moving pieces
+                currentBin.moveAndReplace(nPiecesBefore);
+
+                // Attempt to pack more pieces into the potentially new free space
+                if (!stillNotPlaced.empty()) {
+                    stillNotPlaced = currentBin.boundingBoxPacking(stillNotPlaced, useParallel);
+                }
+
+                // The loop is stable and should terminate if no new pieces were added.
+                if (currentBin.getNPlaced() == piecesInBinBeforeRepack) {
+                    break;
+                }
+            }
+        }
+
+        // Stage 3: Final compression and drop pass to fill any remaining gaps.
+        currentBin.compress(useParallel);
+        if (!stillNotPlaced.empty()) {
+            stillNotPlaced = currentBin.dropPieces(stillNotPlaced, useParallel);
+        }
+        currentBin.compress(useParallel);
+
+        // If the bin is still empty, it means no more pieces could be placed.
+        if (currentBin.getNPlaced() == nPiecesBefore) {
+            std::cerr << "Warning: Could not place any of the " << toPlace.size()
+                      << " remaining pieces into a new bin." << std::endl;
+            bins.pop_back(); // Remove the unused bin.
+            break;
+        }
+
+        toPlace = stillNotPlaced;
+    }
+
+    return bins;
+}
+
 } // namespace BinPacking

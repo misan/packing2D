@@ -1,4 +1,3 @@
-
 #include "utils/SignalHandler.h"
 #include "core/Constants.h"
 #include "core/GeneticOptimizer.h"
@@ -21,6 +20,7 @@ GeneticOptimizer::GeneticOptimizer(const std::vector<MArea>& pieces, const Recta
       generations(generations),
       mutationRate(mutationRate),
       crossoverRate(crossoverRate) {
+    setup_signal_handler();
     rng.seed(std::chrono::high_resolution_clock::now().time_since_epoch().count());
 }
 

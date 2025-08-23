@@ -1,5 +1,6 @@
 #include "core/Bin.h"
 #include "core/BinPacking.h"
+#include "core/GeneticOptimizer.h"
 #include "utils/Utils.h"
 #include <iostream>
 #include <fstream>
@@ -20,11 +21,14 @@ int main(int argc, char* argv[]) {
 
     std::vector<std::string> args(argv + 1, argv + argc);
     bool useParallel = false;
+    bool useGeneticAlgorithm = false;
     std::string fileName;
 
     for (const auto& arg : args) {
         if (arg == "--parallel") {
             useParallel = true;
+        } else if (arg == "--ga" || arg == "--genetic") {
+            useGeneticAlgorithm = true;
         } else {
             fileName = arg;
         }
@@ -55,7 +59,16 @@ int main(int argc, char* argv[]) {
 
     std::cout << "Starting packing process..." << std::endl;
     auto startTime = std::chrono::high_resolution_clock::now();
-    std::vector<Bin> bins = BinPacking::pack(loadResult->pieces, loadResult->binDimension, useParallel);
+    
+    std::vector<Bin> bins;
+    if (useGeneticAlgorithm) {
+        std::cout << "Using Genetic Algorithm for optimization." << std::endl;
+        BinPacking::GeneticOptimizer ga(loadResult->pieces, loadResult->binDimension, useParallel);
+        bins = ga.run();
+    } else {
+        bins = BinPacking::pack(loadResult->pieces, loadResult->binDimension, useParallel);
+    }
+
     auto endTime = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> elapsed = endTime - startTime;
 
@@ -97,9 +110,10 @@ void printUsage() {
     std::cout << std::endl;
     std::cout << "Usage:" << std::endl;
     std::cout << std::endl;
-    std::cout << "$ ./packing_main [--parallel] <file name>" << std::endl;
-    std::cout << "  --parallel : (Optional) Run the packing algorithm using a parallel implementation." << std::endl;
-    std::cout << "  <file name>: file describing pieces (see file structure specifications below)." << std::endl;
+    std::cout << "$ ./packing_main [--parallel] [--ga | --genetic] <file name>" << std::endl;
+    std::cout << "  --parallel      : (Optional) Run the packing algorithm using a parallel implementation." << std::endl;
+    std::cout << "  --ga, --genetic : (Optional) Use the Genetic Algorithm to find a better packing solution." << std::endl;
+    std::cout << "  <file name>     : file describing pieces (see file structure specifications below)." << std::endl;
     std::cout << std::endl;
     std::cout << "The input pieces file should be structured as follows: " << std::endl;
     std::cout << "First line: 'width  height',integer bin dimensions separates by a space" << std::endl;

@@ -844,3 +844,8 @@ std::optional<MArea> Bin::tryPlaceInJointSpace(const MArea& piece, bool useParal
     
     return std::nullopt;
 }
+
+void Bin::splitScheme(const Rectangle2D& usedFreeArea, const Rectangle2D& justPlacedPieceBB) {
+    // This function is declared but appears to be unused in the provided code.
+    // Providing a stub implementation to resolve potential linker errors.
+}
