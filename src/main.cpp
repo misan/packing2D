@@ -1,5 +1,6 @@
 #include "core/Bin.h"
 #include "core/BinPacking.h"
+#include "HybridBinPacking.h"
 #include "utils/Utils.h"
 #include <iostream>
 #include <fstream>
@@ -20,11 +21,14 @@ int main(int argc, char* argv[]) {
 
     std::vector<std::string> args(argv + 1, argv + argc);
     bool useParallel = false;
+    bool useHybrid = false;
     std::string fileName;
 
     for (const auto& arg : args) {
         if (arg == "--parallel") {
             useParallel = true;
+        } else if (arg == "--hybrid") {
+            useHybrid = true;
         } else {
             fileName = arg;
         }
@@ -53,9 +57,52 @@ int main(int argc, char* argv[]) {
         std::cout << "Running in SEQUENTIAL mode." << std::endl;
     }
 
+    if (useHybrid) {
+        std::cout << "Using HYBRID algorithm." << std::endl;
+    } else {
+        std::cout << "Using GREEDY algorithm." << std::endl;
+    }
+
     std::cout << "Starting packing process..." << std::endl;
     auto startTime = std::chrono::high_resolution_clock::now();
-    std::vector<Bin> bins = BinPacking::pack(loadResult->pieces, loadResult->binDimension, useParallel);
+    
+    std::vector<Bin> bins;
+    if (useHybrid) {
+        // Configure hybrid algorithm based on problem size
+        HybridBinPacking::HybridConfig config;
+        
+        if (loadResult->pieces.size() < 20) {
+            // Fast configuration for small problems
+            config.greedyWeight = 0.8;
+            config.initialTemperature = 50.0;
+            config.coolingRate = 0.85;
+            config.populationSize = 5;
+            config.timeLimitMs = 10000;
+            config.saIterationsPerTemp = 20;
+        } else if (loadResult->pieces.size() < 50) {
+            // Balanced configuration for medium problems
+            config.greedyWeight = 0.7;
+            config.initialTemperature = 100.0;
+            config.coolingRate = 0.95;
+            config.populationSize = 10;
+            config.timeLimitMs = 30000;
+            config.saIterationsPerTemp = 50;
+        } else {
+            // More metaheuristic configuration for large problems
+            config.greedyWeight = 0.5;
+            config.initialTemperature = 200.0;
+            config.coolingRate = 0.9;
+            config.populationSize = 15;
+            config.timeLimitMs = 60000;
+            config.saIterationsPerTemp = 30;
+        }
+        
+        config.useParallel = useParallel;
+        bins = HybridBinPacking::pack(loadResult->pieces, loadResult->binDimension, config);
+    } else {
+        bins = BinPacking::pack(loadResult->pieces, loadResult->binDimension, useParallel);
+    }
+    
     auto endTime = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> elapsed = endTime - startTime;
 
@@ -97,8 +144,9 @@ void printUsage() {
     std::cout << std::endl;
     std::cout << "Usage:" << std::endl;
     std::cout << std::endl;
-    std::cout << "$ ./packing_main [--parallel] <file name>" << std::endl;
+    std::cout << "$ ./packing_main [--parallel] [--hybrid] <file name>" << std::endl;
     std::cout << "  --parallel : (Optional) Run the packing algorithm using a parallel implementation." << std::endl;
+    std::cout << "  --hybrid   : (Optional) Use the hybrid algorithm instead of the greedy algorithm." << std::endl;
     std::cout << "  <file name>: file describing pieces (see file structure specifications below)." << std::endl;
     std::cout << std::endl;
     std::cout << "The input pieces file should be structured as follows: " << std::endl;

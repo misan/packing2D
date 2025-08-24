@@ -35,11 +35,13 @@ add_library(packing_lib STATIC
     src/utils/Utils.cpp
     src/core/Bin.cpp
     src/core/BinPacking.cpp
+    HybridBinPacking.cpp
 )
 set_target_properties(packing_lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 target_include_directories(packing_lib PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src # Add our own src dir to includes
+    ${CMAKE_CURRENT_SOURCE_DIR}     # Add root dir for HybridBinPacking.h
 )
 # Link to the Boost::headers target. This is the modern way to add include paths.
 target_link_libraries(packing_lib PUBLIC Boost::headers TBB::tbb)
@@ -49,6 +51,10 @@ target_link_libraries(packing_lib PUBLIC Boost::headers TBB::tbb)
 add_executable(packing_main src/main.cpp)
 target_link_libraries(packing_main PRIVATE packing_lib TBB::tbb)
 
+# --- Test Hybrid Packing ---
+# This creates an executable to test the hybrid packing algorithm
+add_executable(test_hybrid_packing test_hybrid_packing.cpp)
+target_link_libraries(test_hybrid_packing PRIVATE packing_lib TBB::tbb)
 
 # --- Python Bindings (Future Work) ---
 # To create Python bindings using pybind11, we configure the following section.
