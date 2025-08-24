@@ -1,1 +1,0 @@
-/usr/bin/c++  -std=c++17 -stdlib=libc++ -D_LIBCPP_ENABLE_PARALLEL_ALGORITHMS -march=native -mtune=native -O3 -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/test_hybrid_packing.dir/test_hybrid_packing.cpp.o -o test_hybrid_packing  -Wl,-rpath,/opt/homebrew/lib libpacking_lib.a /opt/homebrew/lib/libtbb.12.16.dylib

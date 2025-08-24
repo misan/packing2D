@@ -1,2 +1,0 @@
-/usr/bin/ar qc libpacking_lib.a CMakeFiles/packing_lib.dir/src/primitives/MArea.cpp.o CMakeFiles/packing_lib.dir/src/primitives/MVector.cpp.o CMakeFiles/packing_lib.dir/src/utils/Utils.cpp.o CMakeFiles/packing_lib.dir/src/core/Bin.cpp.o CMakeFiles/packing_lib.dir/src/core/BinPacking.cpp.o CMakeFiles/packing_lib.dir/HybridBinPacking.cpp.o
-/usr/bin/ranlib libpacking_lib.a
