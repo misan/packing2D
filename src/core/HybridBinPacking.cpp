@@ -37,8 +37,13 @@ std::vector<Bin> HybridPacker::pack(std::vector<MArea>& pieces) {
     // Main evolution loop
     int generation = 0;
     int noImprovementCount = 0;
+    double lastBestFitness = bestSolution.fitness;
     
     while (!checkTimeLimit(startTime) && noImprovementCount < config.noImprovementThreshold) {
+        // Adaptive termination: stop if improvement is negligible
+        if (generation > 50 && std::abs(bestSolution.fitness - lastBestFitness) < 1e-6) {
+            break;
+        }
         // Select parents
         std::vector<Solution> parents = selectParents(population);
         
@@ -82,7 +87,8 @@ std::vector<Bin> HybridPacker::pack(std::vector<MArea>& pieces) {
         
         // Update best solution
         Solution currentBest = *std::min_element(population.begin(), population.end());
-        if (currentBest.fitness < bestSolution.fitness) {
+        if (currentBest.fitness < bestSolution.fitness - 1e-6) { // Significant improvement
+            lastBestFitness = bestSolution.fitness;
             bestSolution = currentBest;
             stats.bestFitness = bestSolution.fitness;
             stats.bestUtilization = bestSolution.utilization;
@@ -95,23 +101,35 @@ std::vector<Bin> HybridPacker::pack(std::vector<MArea>& pieces) {
         stats.totalIterations++;
     }
     
-    // Apply simulated annealing to best solution
+    // Apply multiple rounds of optimization with different techniques
     if (!checkTimeLimit(startTime)) {
+        // First round: simulated annealing
         Solution saSolution = simulatedAnnealing(bestSolution);
         if (saSolution.fitness < bestSolution.fitness) {
             bestSolution = saSolution;
             stats.bestFitness = bestSolution.fitness;
             stats.bestUtilization = bestSolution.utilization;
         }
-    }
-    
-    // Apply final local search to best solution
-    if (!checkTimeLimit(startTime)) {
-        Solution optimizedSolution = localSearch(bestSolution);
-        if (optimizedSolution.fitness < bestSolution.fitness) {
-            bestSolution = optimizedSolution;
-            stats.bestFitness = bestSolution.fitness;
-            stats.bestUtilization = bestSolution.utilization;
+        
+        // Second round: intensified local search
+        if (!checkTimeLimit(startTime)) {
+            // Increase local search intensity temporarily
+            int originalMaxIterations = config.maxLocalSearchIterations;
+            int originalThreshold = config.noImprovementThreshold;
+            
+            config.maxLocalSearchIterations *= 2;
+            config.noImprovementThreshold *= 2;
+            
+            Solution lsSolution = localSearch(bestSolution);
+            if (lsSolution.fitness < bestSolution.fitness) {
+                bestSolution = lsSolution;
+                stats.bestFitness = bestSolution.fitness;
+                stats.bestUtilization = bestSolution.utilization;
+            }
+            
+            // Restore original config
+            config.maxLocalSearchIterations = originalMaxIterations;
+            config.noImprovementThreshold = originalThreshold;
         }
     }
     
@@ -161,7 +179,7 @@ Solution HybridPacker::generateGreedySolution(const std::vector<MArea>& pieces, 
     std::vector<MArea> sortedPieces = pieces;
 
     // Use randomness to select a sorting strategy
-    int strategy = static_cast<int>(randomness * 5);
+    int strategy = static_cast<int>(randomness * 7); // Now 7 strategies
     switch (strategy) {
         case 0: // Area
             std::sort(sortedPieces.begin(), sortedPieces.end(), [](const MArea& a, const MArea& b) {
@@ -188,6 +206,25 @@ Solution HybridPacker::generateGreedySolution(const std::vector<MArea>& pieces, 
         case 4: // Height
             std::sort(sortedPieces.begin(), sortedPieces.end(), [](const MArea& a, const MArea& b) {
                 return RectangleUtils::getHeight(a.getBoundingBox2D()) > RectangleUtils::getHeight(b.getBoundingBox2D());
+            });
+            break;
+        case 5: // Aspect ratio (width/height)
+            std::sort(sortedPieces.begin(), sortedPieces.end(), [](const MArea& a, const MArea& b) {
+                double aspectA = RectangleUtils::getWidth(a.getBoundingBox2D()) / 
+                               std::max(1.0, RectangleUtils::getHeight(a.getBoundingBox2D()));
+                double aspectB = RectangleUtils::getWidth(b.getBoundingBox2D()) / 
+                               std::max(1.0, RectangleUtils::getHeight(b.getBoundingBox2D()));
+                return aspectA > aspectB;
+            });
+            break;
+        case 6: // Bounding box area to actual area ratio
+            std::sort(sortedPieces.begin(), sortedPieces.end(), [](const MArea& a, const MArea& b) {
+                double ratioA = a.getArea() / (RectangleUtils::getWidth(a.getBoundingBox2D()) * 
+                                             RectangleUtils::getHeight(a.getBoundingBox2D()));
+                double ratioB = b.getArea() / (RectangleUtils::getWidth(b.getBoundingBox2D()) * 
+                                             RectangleUtils::getHeight(b.getBoundingBox2D()));
+                // Sort by most "compact" pieces first (higher ratio)
+                return ratioA > ratioB;
             });
             break;
     }

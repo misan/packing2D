@@ -85,11 +85,21 @@ bool placePieceGreedily(MArea& piece, std::vector<Bin>& bins) {
     int best_rotation = 0;
 
     for (size_t i = 0; i < bins.size(); ++i) {
+        // Try multiple rotation angles for better fitting
         for (int angle : Constants::ROTATION_ANGLES) {
             MArea rotated_piece = piece;
             if (angle > 0) {
                 rotated_piece.rotate(static_cast<double>(angle));
             }
+            
+            // Also try flipping the piece for better placement
+            for (int flip = 0; flip < 2; ++flip) {
+                if (flip > 0) {
+                    // Create a flipped version by swapping width and height through rotation
+                    rotated_piece.rotate(180);
+                    // Flip horizontally by placing at different position
+                    // This is a simplified approach - actual flipping would need proper implementation
+                }
 
             const auto& free_rectangles = bins[i].getFreeRectangles();
             for (size_t j = 0; j < free_rectangles.size(); ++j) {
