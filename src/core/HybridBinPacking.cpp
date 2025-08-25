@@ -34,62 +34,17 @@ std::vector<Bin> HybridPacker::pack(std::vector<MArea>& pieces) {
     stats.bestFitness = bestSolution.fitness;
     stats.bestUtilization = bestSolution.utilization;
     
-    // Main evolution loop
-    int generation = 0;
+    // Main evolution loop - simplified and more efficient
     int noImprovementCount = 0;
-    double lastBestFitness = bestSolution.fitness;
+    const int maxGenerations = 20; // Limit generations to prevent excessive computation
     
-    while (!checkTimeLimit(startTime) && noImprovementCount < config.noImprovementThreshold) {
-        // Adaptive termination: stop if improvement is negligible
-        if (generation > 50 && std::abs(bestSolution.fitness - lastBestFitness) < 1e-6) {
-            break;
-        }
-        // Select parents
-        std::vector<Solution> parents = selectParents(population);
-        
-        // Create offspring through crossover and mutation
-        std::vector<Solution> offspring;
-        offspring.reserve(config.populationSize);
-        
-        // Keep elite solutions
+    for (int generation = 0; generation < maxGenerations && !checkTimeLimit(startTime); ++generation) {
+        // Sort population by fitness
         std::sort(population.begin(), population.end());
-        for (int i = 0; i < config.eliteSize && i < population.size(); ++i) {
-            offspring.push_back(population[i]);
-        }
         
-        // Generate rest of offspring
-        while (offspring.size() < config.populationSize) {
-            // Select two parents
-            std::uniform_int_distribution<int> parentDist(0, parents.size() - 1);
-            int idx1 = parentDist(rng);
-            int idx2 = parentDist(rng);
-            while (idx2 == idx1) {
-                idx2 = parentDist(rng);
-            }
-            
-            // Create child through crossover
-            Solution child = crossover(parents[idx1], parents[idx2]);
-            
-            // Apply mutation
-            double mutationRate = 0.1 + (0.4 * (1.0 - generation / 100.0)); // Decreasing mutation rate
-            mutate(child, mutationRate);
-            
-            // Reconstruct bins based on new piece order
-            reconstructSolution(child);
-            
-            // Evaluate child
-            evaluateSolution(child);
-            offspring.push_back(child);
-        }
-        
-        // Replace population
-        population = replacePopulation(population, offspring);
-        
-        // Update best solution
-        Solution currentBest = *std::min_element(population.begin(), population.end());
-        if (currentBest.fitness < bestSolution.fitness - 1e-6) { // Significant improvement
-            lastBestFitness = bestSolution.fitness;
-            bestSolution = currentBest;
+        // Keep best solution
+        if (population[0].fitness < bestSolution.fitness) {
+            bestSolution = population[0];
             stats.bestFitness = bestSolution.fitness;
             stats.bestUtilization = bestSolution.utilization;
             noImprovementCount = 0;
@@ -97,39 +52,44 @@ std::vector<Bin> HybridPacker::pack(std::vector<MArea>& pieces) {
             noImprovementCount++;
         }
         
-        generation++;
+        if (noImprovementCount >= 5) {
+            break;
+        }
+        
+        // Create new population with elite individuals
+        std::vector<Solution> newPopulation;
+        newPopulation.reserve(config.populationSize);
+        
+        // Keep top eliteSize solutions
+        for (int i = 0; i < config.eliteSize; ++i) {
+            newPopulation.push_back(population[i]);
+        }
+        
+        // Fill the rest with mutated versions of the best solutions
+        while (newPopulation.size() < config.populationSize) {
+            // Select a random elite solution to mutate
+            std::uniform_int_distribution<int> eliteDist(0, config.eliteSize - 1);
+            int eliteIndex = eliteDist(rng);
+            
+            Solution mutated = population[eliteIndex];
+            // Apply stronger mutation
+            mutate(mutated, 0.3);
+            reconstructSolution(mutated);
+            evaluateSolution(mutated);
+            newPopulation.push_back(mutated);
+        }
+        
+        population = newPopulation;
         stats.totalIterations++;
     }
     
-    // Apply multiple rounds of optimization with different techniques
+    // Apply local search to best solution if time permits
     if (!checkTimeLimit(startTime)) {
-        // First round: simulated annealing
-        Solution saSolution = simulatedAnnealing(bestSolution);
-        if (saSolution.fitness < bestSolution.fitness) {
-            bestSolution = saSolution;
+        Solution improvedSolution = localSearch(bestSolution);
+        if (improvedSolution.fitness < bestSolution.fitness) {
+            bestSolution = improvedSolution;
             stats.bestFitness = bestSolution.fitness;
             stats.bestUtilization = bestSolution.utilization;
-        }
-        
-        // Second round: intensified local search
-        if (!checkTimeLimit(startTime)) {
-            // Increase local search intensity temporarily
-            int originalMaxIterations = config.maxLocalSearchIterations;
-            int originalThreshold = config.noImprovementThreshold;
-            
-            config.maxLocalSearchIterations *= 2;
-            config.noImprovementThreshold *= 2;
-            
-            Solution lsSolution = localSearch(bestSolution);
-            if (lsSolution.fitness < bestSolution.fitness) {
-                bestSolution = lsSolution;
-                stats.bestFitness = bestSolution.fitness;
-                stats.bestUtilization = bestSolution.utilization;
-            }
-            
-            // Restore original config
-            config.maxLocalSearchIterations = originalMaxIterations;
-            config.noImprovementThreshold = originalThreshold;
         }
     }
     
@@ -250,20 +210,46 @@ Solution HybridPacker::generateGreedySolution(const std::vector<MArea>& pieces, 
 }
 
 void HybridPacker::evaluateSolution(Solution& solution) {
-    // Calculate fitness based on number of bins and utilization
+    if (solution.bins.empty()) {
+        solution.fitness = std::numeric_limits<double>::max();
+        solution.utilization = 0.0;
+        return;
+    }
+    
+    // Calculate total area and bin area
     double totalArea = 0.0;
     double binArea = RectangleUtils::getWidth(binDimension) * RectangleUtils::getHeight(binDimension);
     
+    // Calculate additional metrics for better evaluation
+    double minUtilization = 1.0;
+    double maxUtilization = 0.0;
+    double sumSquaredUtilization = 0.0;
+    
     for (const auto& bin : solution.bins) {
-        totalArea += bin.getOccupiedArea();
+        double binOccupiedArea = bin.getOccupiedArea();
+        totalArea += binOccupiedArea;
+        double binUtilization = binOccupiedArea / binArea;
+        
+        minUtilization = std::min(minUtilization, binUtilization);
+        maxUtilization = std::max(maxUtilization, binUtilization);
+        sumSquaredUtilization += binUtilization * binUtilization;
     }
     
     double totalBinArea = solution.bins.size() * binArea;
     solution.utilization = totalArea / totalBinArea;
     
-    // Fitness function: balance between number of bins and utilization
-    // Lower fitness is better
-    solution.fitness = solution.bins.size() * (2.0 - solution.utilization);
+    // Enhanced fitness function that considers:
+    // 1. Number of bins (most important)
+    // 2. Average utilization
+    // 3. Balance of utilization across bins (minimize variance)
+    // 4. Worst-case utilization
+    double utilizationVariance = (sumSquaredUtilization / solution.bins.size()) - (solution.utilization * solution.utilization);
+    
+    // Weighted fitness function - lower is better
+    solution.fitness = (1000.0 * solution.bins.size()) +           // Primary: minimize number of bins
+                      (100.0 * (1.0 - solution.utilization)) +    // Secondary: maximize average utilization
+                      (50.0 * utilizationVariance) +              // Tertiary: minimize utilization variance
+                      (20.0 * (1.0 - minUtilization));            // Quaternary: improve worst bin utilization
 }
 
 Solution HybridPacker::simulatedAnnealing(const Solution& initialSolution) {
@@ -366,37 +352,17 @@ Solution HybridPacker::generateNeighbor(const Solution& solution) {
 }
 
 Solution HybridPacker::localSearch(const Solution& solution) {
-    Solution currentSolution = solution;
     Solution bestSolution = solution;
     
-    int noImprovementCount = 0;
-    
-    for (int i = 0; i < config.maxLocalSearchIterations && noImprovementCount < config.noImprovementThreshold; ++i) {
-        // Generate a set of neighbor solutions
-        std::vector<Solution> neighbors;
-        for (int j = 0; j < 5; ++j) {
-            Solution neighbor = generateNeighbor(currentSolution);
-            reconstructSolution(neighbor);
-            evaluateSolution(neighbor);
-            neighbors.push_back(neighbor);
+    // Try different perturbation strategies
+    for (int i = 0; i < 10 && !checkTimeLimit(std::chrono::steady_clock::now()); ++i) {
+        Solution neighbor = generateNeighbor(bestSolution);
+        reconstructSolution(neighbor);
+        evaluateSolution(neighbor);
+        
+        if (neighbor.fitness < bestSolution.fitness) {
+            bestSolution = neighbor;
         }
-        
-        // Find best neighbor
-        Solution bestNeighbor = *std::min_element(neighbors.begin(), neighbors.end());
-        
-        // Update current solution if improvement found
-        if (bestNeighbor.fitness < currentSolution.fitness) {
-            currentSolution = bestNeighbor;
-            noImprovementCount = 0;
-        } else {
-            noImprovementCount++;
-        }
-        
-        // Update best solution
-        if (currentSolution.fitness < bestSolution.fitness) {
-            bestSolution = currentSolution;
-        }
-        
         stats.localSearchIterations++;
     }
     

@@ -25,7 +25,7 @@ struct HybridConfig {
     
     // Hybrid parameters
     double greedyWeight = 0.7;  // Weight for greedy component in hybrid evaluation
-    int populationSize = 10;     // Size of population for hybrid approach
+    int populationSize = 5;     // Reduced size for better performance
     int eliteSize = 2;           // Number of elite solutions to preserve
     
     // Performance parameters
