@@ -7,6 +7,9 @@
 #include <random>
 #include <chrono>
 #include <atomic>
+#include <limits> // For std::numeric_limits
+#include <functional> // For std::less
+#include <cmath> // For std::isnan
 
 namespace HybridBinPacking {
 
