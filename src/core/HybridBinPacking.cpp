@@ -6,6 +6,7 @@
 #include <unordered_set>
 #include <future>
 #include <thread>
+#include <cstdlib>
 
 namespace HybridBinPacking {
 
@@ -131,8 +132,13 @@ void HybridPacker::reconstructSolution(Solution& solution) {
         orderedPieces.push_back(originalPieces[idx]);
     }
     
-    // Use the existing BinPacking algorithm to pack pieces in the new order
-    solution.bins = BinPacking::pack(orderedPieces, binDimension, config.useParallel);
+    // Use a probabilistic approach to choose the packing algorithm
+    double random_val = (double)rand() / RAND_MAX;
+    if (random_val < config.greedyWeight) {
+        solution.bins = BinPacking::pack(orderedPieces, binDimension, config.useParallel);
+    } else {
+        solution.bins = BinPacking::slowAndSteadyPack(orderedPieces, binDimension, config.useParallel);
+    }
 }
 
 std::vector<Solution> HybridPacker::initializePopulation(const std::vector<MArea>& pieces) {
@@ -152,32 +158,53 @@ std::vector<Solution> HybridPacker::initializePopulation(const std::vector<MArea
 Solution HybridPacker::generateGreedySolution(const std::vector<MArea>& pieces, double randomness) {
     Solution solution;
     
-    // Create a shuffled copy of pieces based on randomness
-    std::vector<int> indices(pieces.size());
-    std::iota(indices.begin(), indices.end(), 0);
-    
-    if (randomness > 0.0) {
-        // Partial shuffle based on randomness
-        std::uniform_real_distribution<double> dist(0.0, 1.0);
-        for (size_t i = 0; i < indices.size(); ++i) {
-            if (dist(rng) < randomness) {
-                size_t j = std::uniform_int_distribution<size_t>(0, indices.size() - 1)(rng);
-                std::swap(indices[i], indices[j]);
+    std::vector<MArea> sortedPieces = pieces;
+
+    // Use randomness to select a sorting strategy
+    int strategy = static_cast<int>(randomness * 5);
+    switch (strategy) {
+        case 0: // Area
+            std::sort(sortedPieces.begin(), sortedPieces.end(), [](const MArea& a, const MArea& b) {
+                return a.getArea() > b.getArea();
+            });
+            break;
+        case 1: // Perimeter
+            std::sort(sortedPieces.begin(), sortedPieces.end(), [](const MArea& a, const MArea& b) {
+                return RectangleUtils::getWidth(a.getBoundingBox2D()) + RectangleUtils::getHeight(a.getBoundingBox2D()) >
+                       RectangleUtils::getWidth(b.getBoundingBox2D()) + RectangleUtils::getHeight(b.getBoundingBox2D());
+            });
+            break;
+        case 2: // Max dimension
+            std::sort(sortedPieces.begin(), sortedPieces.end(), [](const MArea& a, const MArea& b) {
+                return std::max(RectangleUtils::getWidth(a.getBoundingBox2D()), RectangleUtils::getHeight(a.getBoundingBox2D())) >
+                       std::max(RectangleUtils::getWidth(b.getBoundingBox2D()), RectangleUtils::getHeight(b.getBoundingBox2D()));
+            });
+            break;
+        case 3: // Width
+            std::sort(sortedPieces.begin(), sortedPieces.end(), [](const MArea& a, const MArea& b) {
+                return RectangleUtils::getWidth(a.getBoundingBox2D()) > RectangleUtils::getWidth(b.getBoundingBox2D());
+            });
+            break;
+        case 4: // Height
+            std::sort(sortedPieces.begin(), sortedPieces.end(), [](const MArea& a, const MArea& b) {
+                return RectangleUtils::getHeight(a.getBoundingBox2D()) > RectangleUtils::getHeight(b.getBoundingBox2D());
+            });
+            break;
+    }
+
+    // Create the piece order based on the sorted pieces
+    solution.pieceOrder.clear();
+    for (const auto& p : sortedPieces) {
+        for (size_t i = 0; i < pieces.size(); ++i) {
+            if (p.getID() == pieces[i].getID()) {
+                solution.pieceOrder.push_back(i);
+                break;
             }
         }
     }
-    
-    // Store the piece order
-    solution.pieceOrder = indices;
-    
-    // Create bins and pack pieces
-    std::vector<MArea> piecesToPlace;
-    for (int idx : indices) {
-        piecesToPlace.push_back(pieces[idx]);
-    }
-    
+
     // Use the existing BinPacking algorithm with modifications
-    std::vector<Bin> bins = BinPacking::pack(piecesToPlace, binDimension, config.useParallel);
+    std::vector<Bin> bins = BinPacking::pack(sortedPieces, binDimension, config.useParallel);
     
     solution.bins = bins;
     evaluateSolution(solution);

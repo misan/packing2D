@@ -1,6 +1,9 @@
 #include "BinPacking.h"
+#include "core/Constants.h"
 #include <algorithm>
 #include <iostream>
+#include <limits>
+#include <vector>
 
 namespace BinPacking {
 
@@ -70,6 +73,64 @@ std::vector<Bin> pack(std::vector<MArea>& pieces, const Rectangle2D& binDimensio
         }
 
         toPlace = stillNotPlaced;
+    }
+
+    return bins;
+}
+
+bool placePieceGreedily(MArea& piece, std::vector<Bin>& bins) {
+    double best_area_fit = std::numeric_limits<double>::max();
+    int best_bin_index = -1;
+    int best_free_area_index = -1;
+    int best_rotation = 0;
+
+    for (size_t i = 0; i < bins.size(); ++i) {
+        for (int angle : Constants::ROTATION_ANGLES) {
+            MArea rotated_piece = piece;
+            if (angle > 0) {
+                rotated_piece.rotate(static_cast<double>(angle));
+            }
+
+            const auto& free_rectangles = bins[i].getFreeRectangles();
+            for (size_t j = 0; j < free_rectangles.size(); ++j) {
+                if (RectangleUtils::fits(rotated_piece.getBoundingBox2D(), free_rectangles[j])) {
+                    if (bins[i].canPlaceWithCollisionCheck(rotated_piece, j)) {
+                        double area_fit = RectangleUtils::getArea(free_rectangles[j]) - rotated_piece.getArea();
+                        if (area_fit >= 0 && area_fit < best_area_fit) {
+                            best_area_fit = area_fit;
+                            best_bin_index = i;
+                            best_free_area_index = j;
+                            best_rotation = angle;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (best_bin_index != -1) {
+        if (best_rotation > 0) {
+            piece.rotate(static_cast<double>(best_rotation));
+        }
+        return bins[best_bin_index].addPiece(piece, best_free_area_index);
+    }
+
+    return false;
+}
+
+std::vector<Bin> slowAndSteadyPack(std::vector<MArea>& pieces, const Rectangle2D& binDimension, bool useParallel) {
+    std::vector<Bin> bins;
+    std::sort(pieces.begin(), pieces.end(), [](const MArea& a, const MArea& b) {
+        return a.getArea() > b.getArea();
+    });
+
+    for (auto& piece : pieces) {
+        if (!placePieceGreedily(piece, bins)) {
+            bins.emplace_back(binDimension);
+            if (!placePieceGreedily(piece, bins)) {
+                 std::cerr << "Error: Could not place piece " << piece.getID() << " in a new bin." << std::endl;
+            }
+        }
     }
 
     return bins;
