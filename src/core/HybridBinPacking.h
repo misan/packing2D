@@ -45,6 +45,15 @@ struct Solution {
     Solution() : fitness(std::numeric_limits<double>::max()), utilization(0.0) {}
     
     bool operator<(const Solution& other) const {
+        // Handle cases where fitness might be NaN
+        // Treat NaN as very large values so they sort to the end
+        bool thisIsNan = std::isnan(fitness);
+        bool otherIsNan = std::isnan(other.fitness);
+        
+        if (thisIsNan && otherIsNan) return false;
+        if (thisIsNan) return false;
+        if (otherIsNan) return true;
+        
         return fitness < other.fitness;
     }
 };
