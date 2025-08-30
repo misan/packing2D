@@ -42,7 +42,7 @@ TEST_F(BinTest, Construction) {
 
 TEST_F(BinTest, BoundingBoxPacking_SinglePiece) {
     std::vector<MArea> pieces = { createSquare(0, 0, 20, 1) };
-    std::vector<MArea> unplaced = testBin->boundingBoxPacking(pieces, false);
+    std::vector<MArea> unplaced = testBin->boundingBoxPacking(pieces);
 
     ASSERT_EQ(testBin->getNPlaced(), 1);
     ASSERT_TRUE(unplaced.empty());
@@ -57,7 +57,7 @@ TEST_F(BinTest, BoundingBoxPacking_SinglePiece) {
 
 TEST_F(BinTest, BoundingBoxPacking_PieceTooLarge) {
     std::vector<MArea> pieces = { createSquare(0, 0, 120, 1) };
-    std::vector<MArea> unplaced = testBin->boundingBoxPacking(pieces, false);
+    std::vector<MArea> unplaced = testBin->boundingBoxPacking(pieces);
 
     ASSERT_EQ(testBin->getNPlaced(), 0);
     ASSERT_EQ(unplaced.size(), 1);
@@ -69,7 +69,7 @@ TEST_F(BinTest, BoundingBoxPacking_MultiplePieces) {
         createSquare(0, 0, 30, 1),
         createSquare(0, 0, 30, 2)
     };
-    std::vector<MArea> unplaced = testBin->boundingBoxPacking(pieces, false);
+    std::vector<MArea> unplaced = testBin->boundingBoxPacking(pieces);
 
     ASSERT_EQ(testBin->getNPlaced(), 2);
     ASSERT_TRUE(unplaced.empty());
@@ -81,7 +81,7 @@ TEST_F(BinTest, Compress) {
     MArea piece = createSquare(0, 0, 20, 1);
     piece.placeInPosition(50, 50); // Set an initial high position
     std::vector<MArea> toDrop = { piece };
-    testBin->dropPieces(toDrop, false);
+    testBin->dropPieces(toDrop);
     
     ASSERT_EQ(testBin->getNPlaced(), 1);
     Rectangle2D bbox_before = testBin->getPlacedPieces()[0].getBoundingBox2D();
@@ -89,7 +89,7 @@ TEST_F(BinTest, Compress) {
     ASSERT_NEAR(RectangleUtils::getY(bbox_before), 0.0, 1e-9);
 
     // Now, test the compress method, which should slide it from (50,0) to (0,0).
-    testBin->compress(false);
+    testBin->compress();
 
     Rectangle2D bbox_after = testBin->getPlacedPieces()[0].getBoundingBox2D();
     ASSERT_NEAR(RectangleUtils::getX(bbox_after), 0.0, 1e-9);
@@ -98,14 +98,14 @@ TEST_F(BinTest, Compress) {
 
 TEST_F(BinTest, DropPieces_Stacking) {
     MArea piece1 = createRect(0, 0, 20, 30, 1);
-    testBin->dropPieces({piece1}, false);
+    testBin->dropPieces({piece1});
     ASSERT_EQ(testBin->getNPlaced(), 1);
     Rectangle2D bbox1 = testBin->getPlacedPieces()[0].getBoundingBox2D();
     ASSERT_NEAR(RectangleUtils::getY(bbox1), 0.0, 1e-9);
 
     // Now drop a second piece. It should land on top of the first.
     MArea piece2 = createRect(0, 0, 20, 30, 2);
-    testBin->dropPieces({piece2}, false);
+    testBin->dropPieces({piece2});
     ASSERT_EQ(testBin->getNPlaced(), 2);
     Rectangle2D bbox2 = testBin->getPlacedPieces()[1].getBoundingBox2D();
     ASSERT_NEAR(RectangleUtils::getY(bbox2), RectangleUtils::getMaxY(bbox1), 1e-9);

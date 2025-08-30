@@ -27,6 +27,35 @@ endif()
 # On Debian/Ubuntu: sudo apt-get install libtbb-dev
 find_package(TBB REQUIRED)
 
+# Add local Clipper2 for No-Fit Polygon (NFP) operations
+set(CLIPPER2_LOCAL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/clipper2")
+if(EXISTS "${CLIPPER2_LOCAL_DIR}/Clipper2Lib/include/clipper2/clipper.h")
+    message(STATUS "Found local Clipper2 at: ${CLIPPER2_LOCAL_DIR}")
+    set(CLIPPER2_FOUND TRUE)
+    
+    # Build Clipper2 as static library
+    add_library(clipper2_local STATIC
+        ${CLIPPER2_LOCAL_DIR}/Clipper2Lib/src/clipper.engine.cpp
+        ${CLIPPER2_LOCAL_DIR}/Clipper2Lib/src/clipper.offset.cpp
+        ${CLIPPER2_LOCAL_DIR}/Clipper2Lib/src/clipper.rectclip.cpp
+    )
+    
+    target_include_directories(clipper2_local PUBLIC
+        ${CLIPPER2_LOCAL_DIR}/Clipper2Lib/include
+    )
+    
+    set(CLIPPER2_INCLUDE_DIRS ${CLIPPER2_LOCAL_DIR}/Clipper2Lib/include)
+    set(CLIPPER2_LIBRARIES clipper2_local)
+    
+    add_definitions(-DHAVE_CLIPPER2)
+    message(STATUS "Clipper2 NFP functionality enabled")
+else()
+    message(WARNING "Local Clipper2 not found at ${CLIPPER2_LOCAL_DIR}. Using fallback NFP implementation.")
+    set(CLIPPER2_FOUND FALSE)
+    set(CLIPPER2_INCLUDE_DIRS "")
+    set(CLIPPER2_LIBRARIES "")
+endif()
+
 # --- Library ---
 # This creates the static library `packing_lib` containing the core logic.
 add_library(packing_lib STATIC
@@ -35,19 +64,33 @@ add_library(packing_lib STATIC
     src/utils/Utils.cpp
     src/core/Bin.cpp
     src/core/BinPacking.cpp
+    src/core/NFPManager.cpp
 )
 set_target_properties(packing_lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 target_include_directories(packing_lib PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src # Add our own src dir to includes
+    ${CLIPPER2_INCLUDE_DIRS}
 )
 # Link to the Boost::headers target. This is the modern way to add include paths.
-target_link_libraries(packing_lib PUBLIC Boost::headers TBB::tbb)
+target_link_libraries(packing_lib PUBLIC Boost::headers TBB::tbb ${CLIPPER2_LIBRARIES})
 
 # --- Executable ---
 # This creates the main executable to run the packing process from the command line.
 add_executable(packing_main src/main.cpp)
 target_link_libraries(packing_main PRIVATE packing_lib TBB::tbb)
+
+# --- NFP Demo Executable ---
+add_executable(nfp_demo demo_nfp_performance.cpp)
+target_link_libraries(nfp_demo PRIVATE packing_lib TBB::tbb)
+
+# --- NFP Integration Test Executable ---
+add_executable(nfp_integration_test test_nfp_integration.cpp)
+target_link_libraries(nfp_integration_test PRIVATE packing_lib TBB::tbb)
+
+# --- Rotation Angles Test Executable ---
+add_executable(rotation_test build/test_rotation_angles.cpp)
+target_link_libraries(rotation_test PRIVATE packing_lib TBB::tbb)
 
 
 # --- Python Bindings (Future Work) ---
@@ -78,7 +121,8 @@ find_package(GTest CONFIG REQUIRED)
 
 add_executable(packing_tests
     tests/test_marea.cpp
-    tests/test_bin.cpp)
+    tests/test_bin.cpp
+    tests/test_nfp.cpp)
 target_link_libraries(packing_tests PRIVATE packing_lib GTest::gtest GTest::gtest_main)
 
 include(GoogleTest)

@@ -55,7 +55,7 @@ int main(int argc, char* argv[]) {
 
     std::cout << "Starting packing process..." << std::endl;
     auto startTime = std::chrono::high_resolution_clock::now();
-    std::vector<Bin> bins = BinPacking::pack(loadResult->pieces, loadResult->binDimension, useParallel);
+    std::vector<Bin> bins = BinPacking::pack(loadResult->pieces, loadResult->binDimension);
     auto endTime = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> elapsed = endTime - startTime;
 

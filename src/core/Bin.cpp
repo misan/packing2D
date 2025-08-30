@@ -5,18 +5,9 @@
 #include <algorithm>
 #include <numeric>
 #include <vector>
-#include <execution>
-#include <mutex>
 
-static bool g_parallelism_disabled_for_tests = false;
 
-namespace TestUtils {
-    void disableParallelismForTests(bool disable) {
-        g_parallelism_disabled_for_tests = disable;
-    }
-}
-
-Bin::Bin(const Rectangle2D& dimension) : dimension(dimension) {
+Bin::Bin(const Rectangle2D& dimension, bool useNFP) : dimension(dimension), useNFPCollisionDetection(useNFP) {
     freeRectangles.push_back(dimension);
 }
 
@@ -24,7 +15,8 @@ Bin::Bin(const Bin& other) :
     dimension(other.dimension),
     placedPieces(other.placedPieces),
     freeRectangles(other.freeRectangles),
-    placedPiecesRTree(other.placedPiecesRTree)
+    placedPiecesRTree(other.placedPiecesRTree),
+    useNFPCollisionDetection(other.useNFPCollisionDetection)
     // collisionMutex is not copied, a new one is default-initialized.
 {
 }
@@ -37,6 +29,7 @@ Bin& Bin::operator=(const Bin& other) {
     placedPieces = other.placedPieces;
     freeRectangles = other.freeRectangles;
     placedPiecesRTree = other.placedPiecesRTree;
+    useNFPCollisionDetection = other.useNFPCollisionDetection;
     // collisionMutex is not copied.
     return *this;
 }
@@ -66,6 +59,12 @@ double Bin::getEmptyArea() const {
 }
 
 bool Bin::isCollision(const MArea& piece, std::optional<size_t> ignoredPieceIndex) {
+    // Switch between NFP-based and R-tree based collision detection
+    if (useNFPCollisionDetection) {
+        return isCollisionNFP(piece, ignoredPieceIndex);
+    }
+    
+    // Original R-tree based collision detection
     // 1. Broad phase: Query the R-tree to find pieces whose bounding boxes intersect with the new piece's bounding box.
     std::vector<RTreeValue> candidates;
     placedPiecesRTree.query(boost::geometry::index::intersects(piece.getBoundingBox2D()), std::back_inserter(candidates));
@@ -91,21 +90,62 @@ bool Bin::isCollision(const MArea& piece, std::optional<size_t> ignoredPieceInde
     return false; // No precise collisions found.
 }
 
+bool Bin::isCollisionNFP(const MArea& piece, std::optional<size_t> ignoredPieceIndex) {
+    // Create obstacles list, excluding ignored piece if specified
+    std::vector<MArea> obstacles;
+    obstacles.reserve(placedPieces.size());
+    
+    for (size_t i = 0; i < placedPieces.size(); ++i) {
+        if (!ignoredPieceIndex || i != *ignoredPieceIndex) {
+            obstacles.push_back(placedPieces[i]);
+        }
+    }
+    
+    // Get the piece's current position
+    Rectangle2D pieceBB = piece.getBoundingBox2D();
+    PointD currentPos(RectangleUtils::getX(pieceBB), RectangleUtils::getY(pieceBB));
+    
+    // Use NFP to check if current position is valid
+    return !nfpManager.isValidPlacement(piece, currentPos, obstacles, dimension);
+}
 
-Bin::Placement Bin::findWhereToPlace(const MArea& piece, bool useParallel) {
+bool Bin::isValidPlacementNFP(const MArea& piece, const PointD& position, std::optional<size_t> ignoredPieceIndex) {
+    // Create obstacles list, excluding ignored piece if specified
+    std::vector<MArea> obstacles;
+    obstacles.reserve(placedPieces.size());
+    
+    for (size_t i = 0; i < placedPieces.size(); ++i) {
+        if (!ignoredPieceIndex || i != *ignoredPieceIndex) {
+            obstacles.push_back(placedPieces[i]);
+        }
+    }
+    
+    // Use NFP to check if position is valid
+    return nfpManager.isValidPlacement(piece, position, obstacles, dimension);
+}
+
+void Bin::addPieceForTesting(const MArea& piece) {
+    placedPieces.push_back(piece);
+    Rectangle2D pieceBB = piece.getBoundingBox2D();
+    placedPiecesRTree.insert({pieceBB, placedPieces.size() - 1});
+}
+
+
+Bin::Placement Bin::findWhereToPlace(const MArea& piece) {
     Placement bestPlacement;
     double minWastage = std::numeric_limits<double>::max();
     Rectangle2D pieceBB = piece.getBoundingBox2D();
-    std::mutex mtx;
 
-    auto checkPlacement = [&](int i) {
+    // Simplified sequential processing - no parallel overhead
+    for (int i = static_cast<int>(freeRectangles.size()) - 1; i >= 0; --i) {
         const auto& freeRect = freeRectangles[i];
+        
+        // Check normal orientation
         if (RectangleUtils::fits(pieceBB, freeRect)) {
             double wastage = std::min(
                 RectangleUtils::getWidth(freeRect) - RectangleUtils::getWidth(pieceBB),
                 RectangleUtils::getHeight(freeRect) - RectangleUtils::getHeight(pieceBB)
             );
-            std::lock_guard<std::mutex> lock(mtx);
             if (wastage < minWastage) {
                 minWastage = wastage;
                 bestPlacement.rectIndex = i;
@@ -113,42 +153,24 @@ Bin::Placement Bin::findWhereToPlace(const MArea& piece, bool useParallel) {
             }
         }
 
+        // Check rotated orientation
         if (RectangleUtils::fitsRotated(pieceBB, freeRect)) {
             double wastage = std::min(
                 RectangleUtils::getWidth(freeRect) - RectangleUtils::getHeight(pieceBB),
                 RectangleUtils::getHeight(freeRect) - RectangleUtils::getWidth(pieceBB)
             );
-            std::lock_guard<std::mutex> lock(mtx);
             if (wastage < minWastage) {
                 minWastage = wastage;
                 bestPlacement.rectIndex = i;
                 bestPlacement.requiresRotation = true;
             }
         }
-    };
-
-    if (useParallel && !g_parallelism_disabled_for_tests && freeRectangles.size() > 250) {
-#if __cpp_lib_parallel_algorithm >= 201603L
-        // Use parallel algorithm if supported (C++17 and later)
-        std::vector<int> indices(freeRectangles.size());
-        std::iota(indices.begin(), indices.end(), 0);
-        std::for_each(std::execution::par, indices.begin(), indices.end(), checkPlacement);
-#else
-        // Fallback to sequential if parallel algorithms are not supported
-        for (int i = static_cast<int>(freeRectangles.size()) - 1; i >= 0; --i) {
-            checkPlacement(i);
-        }
-#endif
-    } else {
-        for (int i = static_cast<int>(freeRectangles.size()) - 1; i >= 0; --i) {
-            checkPlacement(i);
-        }
     }
 
     return bestPlacement;
 }
 
-std::vector<MArea> Bin::boundingBoxPacking(std::vector<MArea>& piecesToPlace, bool useParallel) {
+std::vector<MArea> Bin::boundingBoxPacking(std::vector<MArea>& piecesToPlace) {
     std::vector<MArea> notPlacedPieces;
 
     std::sort(piecesToPlace.begin(), piecesToPlace.end(), [](const MArea& a, const MArea& b) {
@@ -156,7 +178,7 @@ std::vector<MArea> Bin::boundingBoxPacking(std::vector<MArea>& piecesToPlace, bo
     });
 
     for (const auto& piece : piecesToPlace) {
-        Placement placement = findWhereToPlace(piece, useParallel);
+        Placement placement = findWhereToPlace(piece);
 
         if (placement.rectIndex != -1) {
             const Rectangle2D& freeRect = freeRectangles[placement.rectIndex];
@@ -234,7 +256,7 @@ void Bin::eliminateNonMaximal() {
     rects.erase(new_end, rects.end());
 }
 
-void Bin::compress(bool useParallel) {
+void Bin::compress() {
     if (placedPieces.empty()) {
         return;
     }
@@ -269,7 +291,7 @@ bool Bin::compressPiece(size_t pieceIndex, const MVector& vector) {
         if (vector.getY() != 0) {
             MVector u_y(0, vector.getY());
             pieceToMove.move(u_y);
-            if (pieceToMove.isInside(this->dimension) && !isCollision(pieceToMove)) {
+            if (pieceToMove.isInside(this->dimension) && !isCollision(pieceToMove, pieceIndex)) {
                 moved_in_iter = true;
                 total_moves++;
             } else {
@@ -280,7 +302,7 @@ bool Bin::compressPiece(size_t pieceIndex, const MVector& vector) {
         if (vector.getX() != 0) {
             MVector u_x(vector.getX(), 0);
             pieceToMove.move(u_x);
-            if (pieceToMove.isInside(this->dimension) && !isCollision(pieceToMove)) {
+            if (pieceToMove.isInside(this->dimension) && !isCollision(pieceToMove, pieceIndex)) {
                 moved_in_iter = true;
                 total_moves++;
             } else {
@@ -295,39 +317,8 @@ bool Bin::compressPiece(size_t pieceIndex, const MVector& vector) {
     return total_moves > 0;
 }
 
-bool Bin::compressPiece_parallel_helper(MArea& piece, size_t pieceIndex) {
-    const MVector vector(-1.0, -1.0);
-    int total_moves = 0;
-    bool moved_in_iter = true;
-    while (moved_in_iter) {
-        moved_in_iter = false;
 
-        if (vector.getY() != 0) {
-            MVector u_y(0, vector.getY());
-            piece.move(u_y);
-            if (piece.isInside(this->dimension) && !isCollision(piece, pieceIndex)) {
-                moved_in_iter = true;
-                total_moves++;
-            } else {
-                piece.move(u_y.inverse());
-            }
-        }
-
-        if (vector.getX() != 0) {
-            MVector u_x(vector.getX(), 0);
-            piece.move(u_x);
-            if (piece.isInside(this->dimension) && !isCollision(piece, pieceIndex)) {
-                moved_in_iter = true;
-                total_moves++;
-            } else {
-                piece.move(u_x.inverse());
-            }
-        }
-    }
-    return total_moves > 0;
-}
-
-std::vector<MArea> Bin::dropPieces(const std::vector<MArea>& piecesToDrop, bool useParallel) {
+std::vector<MArea> Bin::dropPieces(const std::vector<MArea>& piecesToDrop) {
     std::vector<MArea> unplacedPieces;
 
     for (const auto& pieceToTry : piecesToDrop) {
@@ -338,7 +329,7 @@ std::vector<MArea> Bin::dropPieces(const std::vector<MArea>& piecesToDrop, bool 
                 candidate.rotate(static_cast<double>(angle));
             }
 
-            if (auto placedPiece = dive(candidate, useParallel)) {
+            if (auto placedPiece = dive(candidate)) {
                 placedPieces.push_back(*placedPiece);
                 placedPiecesRTree.insert({placedPiece->getBoundingBox2D(), placedPieces.size() - 1});
                 wasPlaced = true;
@@ -352,7 +343,7 @@ std::vector<MArea> Bin::dropPieces(const std::vector<MArea>& piecesToDrop, bool 
     return unplacedPieces;
 }
 
-std::optional<MArea> Bin::dive(MArea toDive, bool useParallel) {
+std::optional<MArea> Bin::dive(MArea toDive) {
     Rectangle2D pieceBB = toDive.getBoundingBox2D();
     double pieceWidth = RectangleUtils::getWidth(pieceBB);
     double pieceHeight = RectangleUtils::getHeight(pieceBB);
@@ -474,4 +465,267 @@ std::optional<MArea> Bin::sweep(const MArea& container, MArea inside, size_t ign
     }
 
     return std::nullopt;
+}
+
+// ===== SOPHISTICATED FREE SPACE ISLAND DETECTION =====
+
+void Bin::FreeSpaceIsland::computePrincipalAxes() {
+    std::vector<MPointDouble> vertices = shape.getOuterVertices();
+    if (vertices.empty()) {
+        // Fallback for empty shape
+        majorAxisLength = minorAxisLength = robustness = 0.0;
+        principalAngle = 0.0;
+        aspectRatio = 1.0;
+        centroid = PointD(0, 0);
+        return;
+    }
+    
+    // Compute true centroid
+    double cx = 0.0, cy = 0.0;
+    for (const auto& vertex : vertices) {
+        cx += vertex.x();
+        cy += vertex.y();
+    }
+    cx /= vertices.size();
+    cy /= vertices.size();
+    centroid = PointD(cx, cy);
+    
+    // Compute covariance matrix for Principal Component Analysis
+    double xx = 0, xy = 0, yy = 0;
+    for (const auto& vertex : vertices) {
+        double dx = vertex.x() - cx;
+        double dy = vertex.y() - cy;
+        xx += dx * dx;
+        xy += dx * dy;
+        yy += dy * dy;
+    }
+    xx /= vertices.size();
+    xy /= vertices.size();
+    yy /= vertices.size();
+    
+    // Find eigenvalues and eigenvectors of covariance matrix
+    double trace = xx + yy;
+    double det = xx * yy - xy * xy;
+    
+    if (det < 1e-10) {
+        // Degenerate case - use bounding box approach
+        Rectangle2D bb = shape.getBoundingBox2D();
+        majorAxisLength = std::max(RectangleUtils::getWidth(bb), RectangleUtils::getHeight(bb));
+        minorAxisLength = std::min(RectangleUtils::getWidth(bb), RectangleUtils::getHeight(bb));
+        principalAngle = (RectangleUtils::getWidth(bb) > RectangleUtils::getHeight(bb)) ? 0.0 : 90.0;
+    } else {
+        double lambda1 = (trace + sqrt(trace * trace - 4 * det)) / 2;  // Major eigenvalue
+        double lambda2 = (trace - sqrt(trace * trace - 4 * det)) / 2;  // Minor eigenvalue
+        
+        // Principal axis angle (major eigenvector direction)
+        if (std::abs(xy) > 1e-9) {
+            principalAngle = atan2(lambda1 - xx, xy) * 180.0 / M_PI;
+        } else {
+            principalAngle = (xx > yy) ? 0.0 : 90.0;  // Axis-aligned case
+        }
+        
+        // Project all vertices onto principal axes to find actual extents
+        double maxProj = -std::numeric_limits<double>::max();
+        double minProj = std::numeric_limits<double>::max();
+        double maxPerpProj = -std::numeric_limits<double>::max();
+        double minPerpProj = std::numeric_limits<double>::max();
+        
+        double cosAngle = cos(principalAngle * M_PI / 180.0);
+        double sinAngle = sin(principalAngle * M_PI / 180.0);
+        
+        for (const auto& vertex : vertices) {
+            double dx = vertex.x() - cx;
+            double dy = vertex.y() - cy;
+            
+            // Project onto major axis
+            double projMajor = dx * cosAngle + dy * sinAngle;
+            maxProj = std::max(maxProj, projMajor);
+            minProj = std::min(minProj, projMajor);
+            
+            // Project onto minor axis (perpendicular)
+            double projMinor = -dx * sinAngle + dy * cosAngle;
+            maxPerpProj = std::max(maxPerpProj, projMinor);
+            minPerpProj = std::min(minPerpProj, projMinor);
+        }
+        
+        majorAxisLength = maxProj - minProj;
+        minorAxisLength = maxPerpProj - minPerpProj;
+    }
+    
+    robustness = minorAxisLength;  // Thickness = minor axis length
+    aspectRatio = (minorAxisLength > 1e-9) ? majorAxisLength / minorAxisLength : 1000.0;  // Very high ratio for degenerate
+}
+
+std::vector<Bin::FreeSpaceIsland> Bin::detectAdaptiveFreeSpaceIslands() {
+    std::vector<FreeSpaceIsland> islands;
+
+    MArea binArea({
+        MPointDouble(RectangleUtils::getX(dimension), RectangleUtils::getY(dimension)),
+        MPointDouble(RectangleUtils::getMaxX(dimension), RectangleUtils::getY(dimension)),
+        MPointDouble(RectangleUtils::getMaxX(dimension), RectangleUtils::getMaxY(dimension)),
+        MPointDouble(RectangleUtils::getX(dimension), RectangleUtils::getMaxY(dimension))
+    }, -1);
+
+    if (placedPieces.empty()) {
+        islands.emplace_back(binArea);
+        return islands;
+    }
+
+    try {
+        // Compute the union of all placed pieces to define the occupied region.
+        MArea occupiedRegion = computePlacedPiecesUnion();
+
+        // Subtract the occupied region from the total bin area to get the free space.
+        MultiPolygon freePolygons;
+        boost::geometry::difference(binArea.getShape(), occupiedRegion.getShape(), freePolygons);
+
+        // Each polygon in the resulting multi-polygon is a disconnected free space island.
+        for (const auto& poly : freePolygons) {
+            if (boost::geometry::area(poly) > 1.0) { // Ignore tiny sliver polygons
+                islands.emplace_back(MArea(poly, -1));
+            }
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "Error in adaptive island detection: " << e.what() << std::endl;
+        // Fallback to empty islands
+    }
+
+    return islands;
+}
+
+MArea Bin::computePlacedPiecesUnion() {
+    if (placedPieces.empty()) {
+        return MArea();
+    }
+
+    MArea result = placedPieces[0];
+    for (size_t i = 1; i < placedPieces.size(); ++i) {
+        result.add(placedPieces[i]);
+    }
+    return result;
+}
+
+std::vector<MArea> Bin::placeInGlobalFreeSpace(std::vector<MArea>& piecesToPlace, bool extendedRotations) {
+    std::vector<MArea> unplacedPieces;
+    
+    if (piecesToPlace.empty()) {
+        return unplacedPieces;
+    }
+    
+    // Sort pieces by area (largest first) for better placement order
+    std::sort(piecesToPlace.begin(), piecesToPlace.end(), 
+        [](const MArea& a, const MArea& b) {
+            return a.getArea() > b.getArea();
+        });
+    
+    for (const auto& piece : piecesToPlace) {
+        // Detect current free space islands (updated after each placement)
+        std::vector<FreeSpaceIsland> islands = detectAdaptiveFreeSpaceIslands();
+        
+        // Find best placement for this piece using sophisticated island-based approach
+        auto placement = findBestIslandPlacement(piece, islands, extendedRotations);
+        
+        if (placement.has_value()) {
+            // Place the piece
+            MArea placedPiece = piece;
+            
+            // Apply rotation if needed
+            if (std::abs(placement->rotationAngle) > 1e-6) {
+                placedPiece.rotate(placement->rotationAngle);
+            }
+            
+            // Move to position
+            placedPiece.placeInPosition(placement->position.x, placement->position.y);
+            
+            // Verify no collision (safety check)
+            if (!isCollision(placedPiece)) {
+                placedPieces.push_back(placedPiece);
+                placedPiecesRTree.insert({placedPiece.getBoundingBox2D(), placedPieces.size() - 1});
+            } else {
+                unplacedPieces.push_back(piece);
+            }
+        } else {
+            unplacedPieces.push_back(piece);
+        }
+    }
+    
+    return unplacedPieces;
+}
+
+std::optional<Bin::GlobalPlacement> Bin::findBestIslandPlacement(
+    const MArea& piece, 
+    const std::vector<FreeSpaceIsland>& islands,
+    bool extendedRotations) {
+    
+    if (islands.empty()) {
+        return std::nullopt;
+    }
+    
+    std::optional<GlobalPlacement> bestPlacement;
+    double bestScore = -1e9;
+
+    auto sortedIslands = islands;
+    std::sort(sortedIslands.begin(), sortedIslands.end(), 
+        [](const FreeSpaceIsland& a, const FreeSpaceIsland& b) {
+            return a.area > b.area;
+        });
+    
+    for (size_t islandIdx = 0; islandIdx < sortedIslands.size(); ++islandIdx) {
+        const auto& island = sortedIslands[islandIdx];
+        
+        if (piece.getArea() > island.area * 1.1) {
+            continue;
+        }
+        
+        std::vector<double> rotationAngles = {0.0, 90.0, 180.0, 270.0};
+        if (extendedRotations) {
+            for (int angle = 30; angle < 360; angle += 30) { // Coarser steps for performance
+                rotationAngles.push_back(static_cast<double>(angle));
+            }
+        }
+        
+        for (double angle : rotationAngles) {
+            MArea rotatedPiece = piece;
+            if (std::abs(angle) > 1e-6) {
+                rotatedPiece.rotate(angle);
+            }
+            
+            Rectangle2D rotatedBB = rotatedPiece.getBoundingBox2D();
+            Rectangle2D islandBB = island.shape.getBoundingBox2D();
+
+            // --- Grid Search for Placement ---
+            double dx = std::max(5.0, RectangleUtils::getWidth(rotatedBB) / 4.0);
+            double dy = std::max(5.0, RectangleUtils::getHeight(rotatedBB) / 4.0);
+
+            for (double y = islandBB.min_corner().y(); y + RectangleUtils::getHeight(rotatedBB) <= islandBB.max_corner().y() + 1e-9; y += dy) {
+                for (double x = islandBB.min_corner().x(); x + RectangleUtils::getWidth(rotatedBB) <= islandBB.max_corner().x() + 1e-9; x += dx) {
+                    
+                    MArea candidate = rotatedPiece;
+                    candidate.placeInPosition(x, y);
+
+                    if (boost::geometry::within(candidate.getShape(), island.shape.getShape())) {
+                        double score = -y * 1000 - x; // Prioritize bottom-left
+                        if (score > bestScore) {
+                            bestScore = score;
+                            bestPlacement = GlobalPlacement{
+                                islandIdx,
+                                PointD(x, y),
+                                angle,
+                                island.area - candidate.getArea()
+                            };
+                        }
+                    }
+                }
+            }
+            // --- End of Grid Search ---
+        }
+    }
+    
+    return bestPlacement;
+}
+
+std::vector<MArea> Bin::decomposeFreeRegion(const MArea& complexRegion) {
+    // For now, return the region as-is
+    // TODO: Implement sophisticated polygon decomposition for complex regions
+    return {complexRegion};
 }

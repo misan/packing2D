@@ -4,7 +4,7 @@
 
 namespace BinPacking {
 
-std::vector<Bin> pack(std::vector<MArea>& pieces, const Rectangle2D& binDimension, bool useParallel) {
+std::vector<Bin> pack(std::vector<MArea>& pieces, const Rectangle2D& binDimension) {
     std::vector<Bin> bins;
 
     // Sort pieces by area, largest first.
@@ -25,41 +25,33 @@ std::vector<Bin> pack(std::vector<MArea>& pieces, const Rectangle2D& binDimensio
         }
         lastLoopUnplacedCount = toPlace.size();
 
-        bins.emplace_back(binDimension);
+        bins.emplace_back(binDimension, true); // Enable NFP for better free space detection
         Bin& currentBin = bins.back();
         size_t nPiecesBefore = currentBin.getNPlaced();
 
         // Stage 1: Initial packing using bounding boxes.
-        std::vector<MArea> stillNotPlaced = currentBin.boundingBoxPacking(toPlace, useParallel);
+        std::vector<MArea> stillNotPlaced = currentBin.boundingBoxPacking(toPlace);
 
-        // Stage 2: Iteratively optimize and repack.
-        if (currentBin.getNPlaced() > nPiecesBefore) {
-            while (true) {
-                size_t piecesInBinBeforeRepack = currentBin.getNPlaced();
+        // Stage 2: Advanced global free space placement for Stage2-parts.
+        // This replaces the old moveAndReplace approach with global optimization.
+        if (currentBin.getNPlaced() > nPiecesBefore && !stillNotPlaced.empty()) {
+            // Use global free space detection to place remaining pieces
+            // This can find and utilize gaps between Stage1-parts that were previously missed
+            stillNotPlaced = currentBin.placeInGlobalFreeSpace(stillNotPlaced, false /* basic rotations */);
+        }
 
-                // Try to optimize the layout by moving pieces
-                currentBin.moveAndReplace(nPiecesBefore);
-
-                // Attempt to pack more pieces into the potentially new free space
-                if (!stillNotPlaced.empty()) {
-                    stillNotPlaced = currentBin.boundingBoxPacking(stillNotPlaced, useParallel);
-                }
-
-                // The loop is stable and should terminate if no new pieces were added.
-                // The `moveAndReplace` might shuffle pieces internally, but if it doesn't
-                // create space for new pieces, we are not making progress.
-                if (currentBin.getNPlaced() == piecesInBinBeforeRepack) {
-                    break;
-                }
+        // Stage 3: Final gap filling with extended rotations and compression.
+        currentBin.compress();
+        if (!stillNotPlaced.empty()) {
+            // First try traditional drop placement
+            stillNotPlaced = currentBin.dropPieces(stillNotPlaced);
+            
+            // If pieces still remain, try global free space with extended rotations
+            if (!stillNotPlaced.empty()) {
+                stillNotPlaced = currentBin.placeInGlobalFreeSpace(stillNotPlaced, true /* extended rotations */);
             }
         }
-
-        // Stage 3: Final compression and drop pass to fill any remaining gaps.
-        currentBin.compress(useParallel);
-        if (!stillNotPlaced.empty()) {
-            stillNotPlaced = currentBin.dropPieces(stillNotPlaced, useParallel);
-        }
-        currentBin.compress(useParallel);
+        currentBin.compress();
 
         // If the bin is still empty, it means the largest remaining piece is too big.
         if (currentBin.getNPlaced() == nPiecesBefore) {

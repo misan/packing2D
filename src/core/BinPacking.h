@@ -15,7 +15,7 @@ namespace BinPacking {
  * @param binDimension The dimensions of the bins to use.
  * @return A vector of Bins, each containing the pieces placed within it.
  */
-std::vector<Bin> pack(std::vector<MArea>& pieces, const Rectangle2D& binDimension, bool useParallel);
+std::vector<Bin> pack(std::vector<MArea>& pieces, const Rectangle2D& binDimension);
 
 } // namespace BinPacking
 

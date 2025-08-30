@@ -27,6 +27,13 @@ MArea::MArea(const std::vector<MPointDouble>& points, int id) : id(id), rotation
     updateArea();
 }
 
+MArea::MArea(const Polygon& p, int id) : id(id), rotation(0.0) {
+    Polygon poly = p;
+    bg::correct(poly);
+    shape.push_back(poly);
+    updateArea();
+}
+
 MArea::MArea(const MArea& outer, const MArea& inner) : id(outer.id), rotation(0.0) {
     bg::difference(outer.shape, inner.shape, this->shape);
     updateArea();
@@ -165,6 +172,40 @@ void MArea::placeInPosition(double x, double y) {
 
     MVector translation_vector(x - currentX, y - currentY);
     move(translation_vector);
+}
+
+std::vector<MPointDouble> MArea::getOuterVertices() const {
+    std::vector<MPointDouble> vertices;
+    
+    if (isEmpty() || shape.empty()) {
+        return vertices;
+    }
+    
+    // Get the first (and typically only) polygon from the multi-polygon
+    const auto& polygon = shape[0];
+    const auto& outerRing = polygon.outer();
+    
+    vertices.reserve(outerRing.size());
+    for (size_t i = 0; i < outerRing.size(); ++i) {
+        const auto& point = outerRing[i];
+        vertices.emplace_back(point.x(), point.y());
+        
+        // Boost geometry often duplicates the first vertex at the end
+        // Skip the last vertex if it's the same as the first
+        if (i == outerRing.size() - 1 && outerRing.size() > 1) {
+            const auto& firstPoint = outerRing[0];
+            if (std::abs(point.x() - firstPoint.x()) < 1e-9 && 
+                std::abs(point.y() - firstPoint.y()) < 1e-9) {
+                vertices.pop_back(); // Remove duplicate closing vertex
+            }
+        }
+    }
+    
+    return vertices;
+}
+
+const MultiPolygon& MArea::getShape() const {
+    return shape;
 }
 
 bool MArea::ByArea::operator()(const MArea& a, const MArea& b) const {

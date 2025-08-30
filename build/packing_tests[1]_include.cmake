@@ -1,0 +1,5 @@
+if(EXISTS "/Users/misan/Dropbox/softLleona/claude_code/packing2D/build/packing_tests[1]_tests.cmake")
+  include("/Users/misan/Dropbox/softLleona/claude_code/packing2D/build/packing_tests[1]_tests.cmake")
+else()
+  add_test(packing_tests_NOT_BUILT packing_tests_NOT_BUILT)
+endif()

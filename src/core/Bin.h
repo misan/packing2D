@@ -2,9 +2,9 @@
 
 #include "primitives/MArea.h"
 #include "primitives/Rectangle.h"
+#include "NFPManager.h"
 #include <vector>
 #include <optional>
-#include <mutex>
 #include <boost/geometry/index/rtree.hpp>
 
 // Forward declaration for the test fixture to be declared as a friend.
@@ -21,8 +21,9 @@ public:
     /**
      * @brief Initializes this bin with the specified dimensions.
      * @param dimension The rectangle defining the bin's boundaries.
+     * @param useNFP Enable NFP-based collision detection (default: false for backward compatibility).
      */
-    Bin(const Rectangle2D& dimension);
+    Bin(const Rectangle2D& dimension, bool useNFP = false);
     Bin(const Bin& other);
     Bin& operator=(const Bin& other);
 
@@ -57,20 +58,19 @@ public:
      * @param piecesToPlace A list of pieces to try and place in the bin. The list will be sorted.
      * @return A vector of pieces that could not be placed.
      */
-    std::vector<MArea> boundingBoxPacking(std::vector<MArea>& piecesToPlace, bool useParallel);
+    std::vector<MArea> boundingBoxPacking(std::vector<MArea>& piecesToPlace);
 
     /**
      * @brief Compress all placed pieces in this bin towards the lower-left corner.
      */
-    void compress(bool useParallel);
+    void compress();
 
     /**
      * @brief Drops pieces from the top of the bin to find a valid, non-occupied position.
      * @param piecesToDrop A list of pieces to try and place in the bin.
-     * @param useParallel If true, the packing will be done in parallel.
      * @return A vector of pieces that could not be placed.
      */
-    std::vector<MArea> dropPieces(const std::vector<MArea>& piecesToDrop, bool useParallel);
+    std::vector<MArea> dropPieces(const std::vector<MArea>& piecesToDrop);
 
     /**
      * @brief Tries to place already placed pieces inside other placed pieces.
@@ -92,10 +92,22 @@ public:
     /**
      * @brief Finds the best free rectangle to place a piece in based on the minimal-wastage heuristic.
      * @param piece The piece to place.
-     * @param useParallel If true, the packing will be done in parallel.
      * @return A Placement struct with details of the best position.
      */
-    Placement findWhereToPlace(const MArea& piece, bool useParallel);
+    Placement findWhereToPlace(const MArea& piece);
+
+    /**
+     * @brief Add a piece directly to the bin (for testing purposes).
+     * @param piece The piece to add.
+     */
+    void addPieceForTesting(const MArea& piece);
+
+    /**
+     * @brief Public interface to test collision detection methods.
+     * @param piece The piece to check.
+     * @return True if there is a collision, false otherwise.
+     */
+    bool testCollision(const MArea& piece) { return isCollision(piece); }
 
 private:
     // Type definitions for the R-tree.
@@ -108,6 +120,8 @@ private:
     std::vector<MArea> placedPieces;
     std::vector<Rectangle2D> freeRectangles;
     RTree placedPiecesRTree; // The new spatial index
+    NFPManager nfpManager; // NFP-based collision detection and placement
+    bool useNFPCollisionDetection; // Flag to enable NFP-based collision detection
 
     /**
      * @brief Checks if a given piece collides with any of the already placed pieces.
@@ -117,6 +131,23 @@ private:
      * @return True if there is a collision, false otherwise.
      */
     bool isCollision(const MArea& piece, std::optional<size_t> ignoredPieceIndex = std::nullopt);
+
+    /**
+     * @brief NFP-based collision checking - more efficient replacement for isCollision.
+     * @param piece The piece to check at its current position.
+     * @param ignoredPieceIndex An optional index of a piece to ignore during the check.
+     * @return True if there is a collision, false otherwise.
+     */
+    bool isCollisionNFP(const MArea& piece, std::optional<size_t> ignoredPieceIndex = std::nullopt);
+
+    /**
+     * @brief NFP-based placement validation for a piece at a specific position.
+     * @param piece The piece to place.
+     * @param position The position to test.
+     * @param ignoredPieceIndex An optional index of a piece to ignore during the check.
+     * @return True if placement is valid (no collision), false otherwise.
+     */
+    bool isValidPlacementNFP(const MArea& piece, const PointD& position, std::optional<size_t> ignoredPieceIndex = std::nullopt);
 
     /**
      * @brief Divides the rectangular space where a piece was just placed.
@@ -144,21 +175,13 @@ private:
      */
     bool compressPiece(size_t pieceIndex, const MVector& vector);
 
-    /**
-     * @brief Helper for parallel compression. Does not modify shared state.
-     * @param piece The piece to move.
-     * @param pieceIndex The index of the piece.
-     * @return True if the piece was moved, false otherwise.
-     */
-    bool compressPiece_parallel_helper(MArea& piece, size_t pieceIndex);
 
     /**
      * @brief Moves a piece downwards from the top of the bin, sliding horizontally to find a starting slot.
      * @param toDive The piece to drop.
-     * @param useParallel If true, the search for a slot will be parallelized.
      * @return An optional containing the placed piece if successful, otherwise std::nullopt.
      */
-    std::optional<MArea> dive(MArea toDive, bool useParallel);
+    std::optional<MArea> dive(MArea toDive);
 
     /**
      * @brief Sweeps a piece along the interior of a container searching for a non-overlapping position.
@@ -168,8 +191,80 @@ private:
      * @return An optional containing the placed piece if successful, otherwise std::nullopt.
      */
     std::optional<MArea> sweep(const MArea& container, MArea inside, size_t ignoredPieceIndex);
+
+public:
+    /**
+     * @brief Represents a sophisticated free space island with principal component analysis.
+     */
+    struct FreeSpaceIsland {
+        MArea shape;                // The geometric shape of the free region
+        PointD centroid;            // True centroid of the polygon
+        double majorAxisLength;     // Length along principal axis (max extent)
+        double minorAxisLength;     // Length along minor axis (min extent) 
+        double principalAngle;      // Angle of the major axis (in degrees)
+        double robustness;          // Thickness = minorAxisLength
+        double area;                // Area of the region
+        double aspectRatio;         // majorAxisLength / minorAxisLength
+        
+        FreeSpaceIsland(const MArea& s) : shape(s), area(s.getArea()) {
+            computePrincipalAxes();
+        }
+        
+    private:
+        void computePrincipalAxes();
+    };
+
+    /**
+     * @brief Detects sophisticated free space islands using adaptive negative buffering.
+     * This enables Stage2-parts placement in gaps between Stage1-parts.
+     * @return Vector of free space islands available for placement.
+     */
+    std::vector<FreeSpaceIsland> detectAdaptiveFreeSpaceIslands();
+
+    /**
+     * @brief Represents optimal placement info for global free space placement.
+     */
+    struct GlobalPlacement {
+        size_t regionIndex;           // Index in the freeRegions vector
+        PointD position;              // Position to place the piece
+        double rotationAngle;         // Rotation angle to apply
+        double wastedArea;            // Estimated wasted area after placement
+    };
+
+    /**
+     * @brief Advanced Stage2-parts placement using global free space detection.
+     * Replaces the limited moveAndReplace approach with global optimization.
+     * @param piecesToPlace Remaining pieces to be placed (Stage2-parts).
+     * @param extendedRotations If true, use more rotation angles for better fitting.
+     * @return Vector of pieces that could not be placed.
+     */
+    std::vector<MArea> placeInGlobalFreeSpace(std::vector<MArea>& piecesToPlace, bool extendedRotations = false);
+
+    /**
+     * @brief Finds the best free space island and position for a given piece using PCA-based placement.
+     * @param piece The piece to place.
+     * @param islands Available free space islands.
+     * @param extendedRotations Whether to try extended rotation angles.
+     * @return Optional containing placement info if successful.
+     */
+    std::optional<GlobalPlacement> findBestIslandPlacement(
+        const MArea& piece, 
+        const std::vector<FreeSpaceIsland>& islands,
+        bool extendedRotations = false
+    );
+
+private:
+    /**
+     * @brief Computes the union of all placed pieces as a single complex polygon.
+     * @return MArea representing the occupied space in the bin.
+     */
+    MArea computePlacedPiecesUnion();
+
+    /**
+     * @brief Decomposes a complex free region into simpler placeable areas.
+     * @param complexRegion The complex free region to decompose.
+     * @return Vector of simpler regions suitable for piece placement.
+     */
+    std::vector<MArea> decomposeFreeRegion(const MArea& complexRegion);
 };
 
-namespace TestUtils {
-    void disableParallelismForTests(bool disable);
-}

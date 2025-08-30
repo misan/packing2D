@@ -87,5 +87,5 @@ PYBIND11_MODULE(packing_py, m) {
     // The pack function takes a vector by non-const reference because it sorts it internally.
     // pybind11 will automatically convert a Python list of MArea objects to a std::vector<MArea>.
     m.def("pack", &BinPacking::pack, "Main packing algorithm. Takes a list of pieces and bin dimensions, returns a list of bins.",
-          py::arg("pieces"), py::arg("bin_dimension"), py::arg("use_parallel") = false);
+          py::arg("pieces"), py::arg("bin_dimension"));
 }

@@ -1,0 +1,2 @@
+/usr/bin/ar qc libclipper2_local.a CMakeFiles/clipper2_local.dir/clipper2/Clipper2Lib/src/clipper.engine.cpp.o CMakeFiles/clipper2_local.dir/clipper2/Clipper2Lib/src/clipper.offset.cpp.o CMakeFiles/clipper2_local.dir/clipper2/Clipper2Lib/src/clipper.rectclip.cpp.o
+/usr/bin/ranlib libclipper2_local.a

@@ -1,0 +1,11 @@
+/Users/misan/Dropbox/softLleona/claude_code/packing2D/build/CMakeFiles/clipper2_local.dir
+/Users/misan/Dropbox/softLleona/claude_code/packing2D/build/CMakeFiles/packing_lib.dir
+/Users/misan/Dropbox/softLleona/claude_code/packing2D/build/CMakeFiles/packing_main.dir
+/Users/misan/Dropbox/softLleona/claude_code/packing2D/build/CMakeFiles/nfp_demo.dir
+/Users/misan/Dropbox/softLleona/claude_code/packing2D/build/CMakeFiles/nfp_integration_test.dir
+/Users/misan/Dropbox/softLleona/claude_code/packing2D/build/CMakeFiles/rotation_test.dir
+/Users/misan/Dropbox/softLleona/claude_code/packing2D/build/CMakeFiles/packing_py.dir
+/Users/misan/Dropbox/softLleona/claude_code/packing2D/build/CMakeFiles/packing_tests.dir
+/Users/misan/Dropbox/softLleona/claude_code/packing2D/build/CMakeFiles/test.dir
+/Users/misan/Dropbox/softLleona/claude_code/packing2D/build/CMakeFiles/edit_cache.dir
+/Users/misan/Dropbox/softLleona/claude_code/packing2D/build/CMakeFiles/rebuild_cache.dir

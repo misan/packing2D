@@ -1,0 +1,1 @@
+/usr/bin/c++  -std=c++17 -stdlib=libc++ -D_LIBCPP_ENABLE_PARALLEL_ALGORITHMS -march=native -mtune=native -O3 -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/rotation_test.dir/test_rotation_angles.cpp.o -o rotation_test  -Wl,-rpath,/opt/homebrew/lib libpacking_lib.a /opt/homebrew/lib/libtbb.12.16.dylib libclipper2_local.a

@@ -38,7 +38,8 @@ TEST(MAreaTest, PieceWithHole) {
 }
 
 TEST(MAreaTest, Transformations) {
-    MArea rect = MArea({{0,0}, {20,0}, {20,10}, {0,10}}, 3);
+    std::vector<MPointDouble> points = {{0,0}, {20,0}, {20,10}, {0,10}};
+    MArea rect = MArea(points, 3);
 
     // Test placeInPosition
     rect.placeInPosition(50, 60);

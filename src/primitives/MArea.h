@@ -25,6 +25,7 @@ public:
     MArea();
     MArea(const std::vector<MPointDouble>& points, int id);
     MArea(const MArea& outer, const MArea& inner); // For creating holes
+    MArea(const Polygon& p, int id);
 
     int getID() const;
     double getArea() const;
@@ -44,6 +45,18 @@ public:
     void move(const MVector& vector);
     void rotate(double degrees);
     void placeInPosition(double x, double y);
+
+    /**
+     * @brief Get vertices of the outer polygon (for NFP computation).
+     * @return Vector of points representing the outer boundary.
+     */
+    std::vector<MPointDouble> getOuterVertices() const;
+
+    /**
+     * @brief Get access to the internal MultiPolygon shape (for advanced operations).
+     * @return Const reference to the Boost.Geometry MultiPolygon.
+     */
+    const MultiPolygon& getShape() const;
 
     // Comparators
     struct ByArea {

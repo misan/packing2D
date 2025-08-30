@@ -412,6 +412,7 @@ def main():
     print("--- Visualizing Nesting with PDF Output (Precise Transformations) ---")
     
     input_file = "samples/S266.txt"
+    if len(sys.argv)>1: input_file=sys.argv[1]
 
     # 1. Parse the problem file to get original vertices for drawing.
     bin_dimension, original_pieces_vertices = parse_problem_file(input_file)
