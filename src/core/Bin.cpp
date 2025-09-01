@@ -95,34 +95,31 @@ bool Bin::isCollision(const MArea& piece, std::optional<size_t> ignoredPieceInde
 Bin::Placement Bin::findWhereToPlace(const MArea& piece, bool useParallel) {
     Placement bestPlacement;
     double minWastage = std::numeric_limits<double>::max();
-    Rectangle2D pieceBB = piece.getBoundingBox2D();
     std::mutex mtx;
 
     auto checkPlacement = [&](int i) {
         const auto& freeRect = freeRectangles[i];
-        if (RectangleUtils::fits(pieceBB, freeRect)) {
-            double wastage = std::min(
-                RectangleUtils::getWidth(freeRect) - RectangleUtils::getWidth(pieceBB),
-                RectangleUtils::getHeight(freeRect) - RectangleUtils::getHeight(pieceBB)
-            );
-            std::lock_guard<std::mutex> lock(mtx);
-            if (wastage < minWastage) {
-                minWastage = wastage;
-                bestPlacement.rectIndex = i;
-                bestPlacement.requiresRotation = false;
+        
+        // Try all rotation angles (Stage 1 uses 90-degree increments)
+        for (int angle : Constants::STAGE1_ROTATION_ANGLES) {
+            MArea rotatedPiece = piece;
+            if (angle > 0) {
+                rotatedPiece.rotate(static_cast<double>(angle));
             }
-        }
-
-        if (RectangleUtils::fitsRotated(pieceBB, freeRect)) {
-            double wastage = std::min(
-                RectangleUtils::getWidth(freeRect) - RectangleUtils::getHeight(pieceBB),
-                RectangleUtils::getHeight(freeRect) - RectangleUtils::getWidth(pieceBB)
-            );
-            std::lock_guard<std::mutex> lock(mtx);
-            if (wastage < minWastage) {
-                minWastage = wastage;
-                bestPlacement.rectIndex = i;
-                bestPlacement.requiresRotation = true;
+            
+            Rectangle2D pieceBB = rotatedPiece.getBoundingBox2D();
+            
+            if (RectangleUtils::fits(pieceBB, freeRect)) {
+                double wastage = std::min(
+                    RectangleUtils::getWidth(freeRect) - RectangleUtils::getWidth(pieceBB),
+                    RectangleUtils::getHeight(freeRect) - RectangleUtils::getHeight(pieceBB)
+                );
+                std::lock_guard<std::mutex> lock(mtx);
+                if (wastage < minWastage) {
+                    minWastage = wastage;
+                    bestPlacement.rectIndex = i;
+                    bestPlacement.rotationAngle = angle;
+                }
             }
         }
     };
@@ -162,8 +159,8 @@ std::vector<MArea> Bin::boundingBoxPacking(std::vector<MArea>& piecesToPlace, bo
             const Rectangle2D& freeRect = freeRectangles[placement.rectIndex];
             MArea placedPiece = piece;
 
-            if (placement.requiresRotation) {
-                placedPiece.rotate(90);
+            if (placement.rotationAngle > 0) {
+                placedPiece.rotate(static_cast<double>(placement.rotationAngle));
             }
 
             placedPiece.placeInPosition(RectangleUtils::getX(freeRect), RectangleUtils::getY(freeRect));
@@ -174,9 +171,14 @@ std::vector<MArea> Bin::boundingBoxPacking(std::vector<MArea>& piecesToPlace, bo
                 eliminateNonMaximal();
 
                 placedPieces.push_back(placedPiece);
-                placedPiecesRTree.insert({pieceBB, placedPieces.size() - 1});
+                size_t newIndex = placedPieces.size() - 1;
+                placedPiecesRTree.insert({pieceBB, newIndex});
+                
+                std::cerr << "BoundingBoxPacking: Placed piece " << newIndex << " at ("
+                          << RectangleUtils::getX(pieceBB) << ", " << RectangleUtils::getY(pieceBB) << ")" << std::endl;
             } else {
                 notPlacedPieces.push_back(piece);
+                std::cerr << "BoundingBoxPacking: Collision detected during placement" << std::endl;
             }
         } else {
             notPlacedPieces.push_back(piece);
@@ -187,32 +189,66 @@ std::vector<MArea> Bin::boundingBoxPacking(std::vector<MArea>& piecesToPlace, bo
 
 void Bin::computeFreeRectangles(const Rectangle2D& justPlacedPieceBB) {
     std::vector<Rectangle2D> nextFreeRectangles;
-    const double epsilon = 1e-9;
+    const double epsilon = 1e-6; // Increased from 1e-9 for better floating-point robustness
+
+    std::cerr << "computeFreeRectangles: Processing placed piece BB: ("
+              << RectangleUtils::getX(justPlacedPieceBB) << ", " << RectangleUtils::getY(justPlacedPieceBB) << ") - ("
+              << RectangleUtils::getMaxX(justPlacedPieceBB) << ", " << RectangleUtils::getMaxY(justPlacedPieceBB) << ")" << std::endl;
+    std::cerr << "computeFreeRectangles: Current free rectangles count: " << freeRectangles.size() << std::endl;
 
     for (const auto& freeR : freeRectangles) {
         if (!RectangleUtils::intersects(freeR, justPlacedPieceBB)) {
             nextFreeRectangles.push_back(freeR);
+            std::cerr << "computeFreeRectangles: Keeping free rectangle: ("
+                      << RectangleUtils::getX(freeR) << ", " << RectangleUtils::getY(freeR) << ") - ("
+                      << RectangleUtils::getMaxX(freeR) << ", " << RectangleUtils::getMaxY(freeR) << ")" << std::endl;
         } else {
+            std::cerr << "computeFreeRectangles: Splitting free rectangle: ("
+                      << RectangleUtils::getX(freeR) << ", " << RectangleUtils::getY(freeR) << ") - ("
+                      << RectangleUtils::getMaxX(freeR) << ", " << RectangleUtils::getMaxY(freeR) << ")" << std::endl;
+            
             Rectangle2D rIntersection = RectangleUtils::createIntersection(freeR, justPlacedPieceBB);
             double topHeight = RectangleUtils::getMaxY(freeR) - RectangleUtils::getMaxY(rIntersection);
             if (topHeight > epsilon) {
-                nextFreeRectangles.emplace_back(MPointDouble(RectangleUtils::getX(freeR), RectangleUtils::getMaxY(rIntersection)), MPointDouble(RectangleUtils::getMaxX(freeR), RectangleUtils::getMaxY(freeR)));
+                Rectangle2D topRect(MPointDouble(RectangleUtils::getX(freeR), RectangleUtils::getMaxY(rIntersection)),
+                                   MPointDouble(RectangleUtils::getMaxX(freeR), RectangleUtils::getMaxY(freeR)));
+                nextFreeRectangles.push_back(topRect);
+                std::cerr << "computeFreeRectangles: Adding top rectangle: ("
+                          << RectangleUtils::getX(topRect) << ", " << RectangleUtils::getY(topRect) << ") - ("
+                          << RectangleUtils::getMaxX(topRect) << ", " << RectangleUtils::getMaxY(topRect) << ")" << std::endl;
             }
             double bottomHeight = RectangleUtils::getY(rIntersection) - RectangleUtils::getY(freeR);
             if (bottomHeight > epsilon) {
-                nextFreeRectangles.emplace_back(MPointDouble(RectangleUtils::getX(freeR), RectangleUtils::getY(freeR)), MPointDouble(RectangleUtils::getMaxX(freeR), RectangleUtils::getY(rIntersection)));
+                Rectangle2D bottomRect(MPointDouble(RectangleUtils::getX(freeR), RectangleUtils::getY(freeR)),
+                                      MPointDouble(RectangleUtils::getMaxX(freeR), RectangleUtils::getY(rIntersection)));
+                nextFreeRectangles.push_back(bottomRect);
+                std::cerr << "computeFreeRectangles: Adding bottom rectangle: ("
+                          << RectangleUtils::getX(bottomRect) << ", " << RectangleUtils::getY(bottomRect) << ") - ("
+                          << RectangleUtils::getMaxX(bottomRect) << ", " << RectangleUtils::getMaxY(bottomRect) << ")" << std::endl;
             }
             double leftWidth = RectangleUtils::getX(rIntersection) - RectangleUtils::getX(freeR);
             if (leftWidth > epsilon) {
-                nextFreeRectangles.emplace_back(MPointDouble(RectangleUtils::getX(freeR), RectangleUtils::getY(freeR)), MPointDouble(RectangleUtils::getX(rIntersection), RectangleUtils::getMaxY(freeR)));
+                Rectangle2D leftRect(MPointDouble(RectangleUtils::getX(freeR), RectangleUtils::getY(freeR)),
+                                    MPointDouble(RectangleUtils::getX(rIntersection), RectangleUtils::getMaxY(freeR)));
+                nextFreeRectangles.push_back(leftRect);
+                std::cerr << "computeFreeRectangles: Adding left rectangle: ("
+                          << RectangleUtils::getX(leftRect) << ", " << RectangleUtils::getY(leftRect) << ") - ("
+                          << RectangleUtils::getMaxX(leftRect) << ", " << RectangleUtils::getMaxY(leftRect) << ")" << std::endl;
             }
             double rightWidth = RectangleUtils::getMaxX(freeR) - RectangleUtils::getMaxX(rIntersection);
             if (rightWidth > epsilon) {
-                nextFreeRectangles.emplace_back(MPointDouble(RectangleUtils::getMaxX(rIntersection), RectangleUtils::getY(freeR)), MPointDouble(RectangleUtils::getMaxX(freeR), RectangleUtils::getMaxY(freeR)));
+                Rectangle2D rightRect(MPointDouble(RectangleUtils::getMaxX(rIntersection), RectangleUtils::getY(freeR)),
+                                     MPointDouble(RectangleUtils::getMaxX(freeR), RectangleUtils::getMaxY(freeR)));
+                nextFreeRectangles.push_back(rightRect);
+                std::cerr << "computeFreeRectangles: Adding right rectangle: ("
+                          << RectangleUtils::getX(rightRect) << ", " << RectangleUtils::getY(rightRect) << ") - ("
+                          << RectangleUtils::getMaxX(rightRect) << ", " << RectangleUtils::getMaxY(rightRect) << ")" << std::endl;
             }
         }
     }
     freeRectangles = nextFreeRectangles;
+    // Reduced verbosity for better performance
+    // std::cerr << "computeFreeRectangles: New free rectangles count: " << freeRectangles.size() << std::endl;
 }
 
 void Bin::eliminateNonMaximal() {
@@ -239,6 +275,9 @@ void Bin::compress(bool useParallel) {
         return;
     }
 
+    // Use mutex to prevent concurrent compression operations
+    std::lock_guard<std::mutex> lock(compressionMutex);
+
     bool moved_in_pass = true;
     while (moved_in_pass) {
         moved_in_pass = false;
@@ -256,41 +295,52 @@ bool Bin::compressPiece(size_t pieceIndex, const MVector& vector) {
     }
 
     MArea& pieceToMove = placedPieces[pieceIndex];
-    RTreeValue rtreeEntry = {pieceToMove.getBoundingBox2D(), pieceIndex};
-
-    // Temporarily remove the piece from the R-tree to avoid self-collision.
-    placedPiecesRTree.remove(rtreeEntry);
-
     int total_moves = 0;
     bool moved_in_iter = true;
+    
     while (moved_in_iter) {
         moved_in_iter = false;
 
         if (vector.getY() != 0) {
             MVector u_y(0, vector.getY());
+            
+            // Store original position and remove from R-tree
+            MArea originalPiece = pieceToMove;
+            placedPiecesRTree.remove({originalPiece.getBoundingBox2D(), pieceIndex});
+            
             pieceToMove.move(u_y);
-            if (pieceToMove.isInside(this->dimension) && !isCollision(pieceToMove)) {
+            if (pieceToMove.isInside(this->dimension) && !isCollision(pieceToMove, pieceIndex)) {
                 moved_in_iter = true;
                 total_moves++;
+                // Update R-tree with new position
+                placedPiecesRTree.insert({pieceToMove.getBoundingBox2D(), pieceIndex});
             } else {
-                pieceToMove.move(u_y.inverse());
+                // Restore original position and add back to R-tree
+                pieceToMove = originalPiece;
+                placedPiecesRTree.insert({pieceToMove.getBoundingBox2D(), pieceIndex});
             }
         }
 
         if (vector.getX() != 0) {
             MVector u_x(vector.getX(), 0);
+            
+            // Store original position and remove from R-tree
+            MArea originalPiece = pieceToMove;
+            placedPiecesRTree.remove({originalPiece.getBoundingBox2D(), pieceIndex});
+            
             pieceToMove.move(u_x);
-            if (pieceToMove.isInside(this->dimension) && !isCollision(pieceToMove)) {
+            if (pieceToMove.isInside(this->dimension) && !isCollision(pieceToMove, pieceIndex)) {
                 moved_in_iter = true;
                 total_moves++;
+                // Update R-tree with new position
+                placedPiecesRTree.insert({pieceToMove.getBoundingBox2D(), pieceIndex});
             } else {
-                pieceToMove.move(u_x.inverse());
+                // Restore original position and add back to R-tree
+                pieceToMove = originalPiece;
+                placedPiecesRTree.insert({pieceToMove.getBoundingBox2D(), pieceIndex});
             }
         }
     }
-
-    // Add the piece back to the R-tree in its new final position.
-    placedPiecesRTree.insert({pieceToMove.getBoundingBox2D(), pieceIndex});
 
     return total_moves > 0;
 }
@@ -332,7 +382,7 @@ std::vector<MArea> Bin::dropPieces(const std::vector<MArea>& piecesToDrop, bool 
 
     for (const auto& pieceToTry : piecesToDrop) {
         bool wasPlaced = false;
-        for (int angle : Constants::ROTATION_ANGLES) {
+        for (int angle : Constants::STAGE23_ROTATION_ANGLES) {
             MArea candidate = pieceToTry;
             if (angle > 0) {
                 candidate.rotate(static_cast<double>(angle));
@@ -373,9 +423,15 @@ std::optional<MArea> Bin::dive(MArea toDive, bool useParallel) {
         if (!isCollision(tempPiece)) {
             size_t tempIndex = placedPieces.size();
             placedPieces.push_back(tempPiece);
+            placedPiecesRTree.insert({tempPiece.getBoundingBox2D(), tempIndex});
+            
             compressPiece(tempIndex, MVector(0, -1.0));
+            
             MArea finalPiece = placedPieces.back();
+            // Remove the temporary piece from R-tree before popping
+            placedPiecesRTree.remove({finalPiece.getBoundingBox2D(), tempIndex});
             placedPieces.pop_back();
+            
             return finalPiece;
         }
     }
@@ -385,13 +441,83 @@ std::optional<MArea> Bin::dive(MArea toDive, bool useParallel) {
     if (!isCollision(tempPiece)) {
         size_t tempIndex = placedPieces.size();
         placedPieces.push_back(tempPiece);
+        placedPiecesRTree.insert({tempPiece.getBoundingBox2D(), tempIndex});
+        
         compressPiece(tempIndex, MVector(0, -1.0));
+        
         MArea finalPiece = placedPieces.back();
+        // Remove the temporary piece from R-tree before popping
+        placedPiecesRTree.remove({finalPiece.getBoundingBox2D(), tempIndex});
         placedPieces.pop_back();
+        
         return finalPiece;
     }
 
     return std::nullopt;
+}
+
+std::vector<MArea> Bin::placeInFreeZones(std::vector<MArea>& piecesToPlace, bool useParallel) {
+    std::vector<MArea> notPlacedPieces;
+    
+    // Sort pieces by area (largest first)
+    std::sort(piecesToPlace.begin(), piecesToPlace.end(), [](const MArea& a, const MArea& b) {
+        return a.getArea() > b.getArea();
+    });
+
+    // Sort free rectangles by area (largest first)
+    std::vector<Rectangle2D> sortedFreeRects = freeRectangles;
+    std::sort(sortedFreeRects.begin(), sortedFreeRects.end(), [](const Rectangle2D& a, const Rectangle2D& b) {
+        return (RectangleUtils::getWidth(a) * RectangleUtils::getHeight(a)) >
+               (RectangleUtils::getWidth(b) * RectangleUtils::getHeight(b));
+    });
+
+    for (auto& piece : piecesToPlace) {
+        bool wasPlaced = false;
+        
+        // Try to place in each free rectangle (largest free rectangles first)
+        for (const auto& freeRect : sortedFreeRects) {
+            // Try all rotation angles (Stage 2 uses 10-degree increments)
+            for (int angle : Constants::STAGE23_ROTATION_ANGLES) {
+                MArea candidate = piece;
+                if (angle > 0) {
+                    candidate.rotate(static_cast<double>(angle));
+                }
+                
+                Rectangle2D candidateBB = candidate.getBoundingBox2D();
+                
+                // Check if piece fits in this free rectangle
+                if (RectangleUtils::fits(candidateBB, freeRect)) {
+                    // Position the piece in the free rectangle
+                    candidate.placeInPosition(RectangleUtils::getX(freeRect), RectangleUtils::getY(freeRect));
+                    
+                    // Check for collisions
+                    if (!isCollision(candidate)) {
+                        // Place the piece
+                        placedPieces.push_back(candidate);
+                        // Get the actual bounding box after placement
+                        Rectangle2D actualBB = candidate.getBoundingBox2D();
+                        placedPiecesRTree.insert({actualBB, placedPieces.size() - 1});
+                        
+                        // Update free rectangles
+                        computeFreeRectangles(actualBB);
+                        eliminateNonMaximal();
+                        
+                        wasPlaced = true;
+                        break;
+                    }
+                }
+            }
+            if (wasPlaced) {
+                break;
+            }
+        }
+        
+        if (!wasPlaced) {
+            notPlacedPieces.push_back(piece);
+        }
+    }
+    
+    return notPlacedPieces;
 }
 
 bool Bin::moveAndReplace(size_t indexLimit) {
@@ -404,32 +530,23 @@ bool Bin::moveAndReplace(size_t indexLimit) {
             if (container.getFreeArea() > currentArea.getArea()) {
                 Rectangle2D contBB = container.getBoundingBox2D();
 
-                // Try without rotation
-                MArea candidate = currentArea;
-                candidate.placeInPosition(RectangleUtils::getX(contBB), RectangleUtils::getY(contBB));
+                // Try all rotation angles (Stage 2 uses 10-degree increments)
+                for (int angle : Constants::STAGE23_ROTATION_ANGLES) {
+                    MArea candidate = currentArea;
+                    if (angle > 0) {
+                        candidate.rotate(static_cast<double>(angle));
+                    }
+                    candidate.placeInPosition(RectangleUtils::getX(contBB), RectangleUtils::getY(contBB));
 
-                if (auto swept = sweep(container, candidate, i)) {
-                    freeRectangles.push_back(currentArea.getBoundingBox2D());
-                    placedPieces[i] = *swept;
-                    compressPiece(i, MVector(-1.0, -1.0));
-                    computeFreeRectangles(swept->getBoundingBox2D());
-                    eliminateNonMaximal();
-                    movement = true;
-                    goto next_piece; // Break outer loop and continue with next piece
-                }
-
-                // Try with rotation
-                candidate = currentArea;
-                candidate.rotate(90);
-                candidate.placeInPosition(RectangleUtils::getX(contBB), RectangleUtils::getY(contBB));
-                if (auto swept = sweep(container, candidate, i)) {
-                    freeRectangles.push_back(currentArea.getBoundingBox2D());
-                    placedPieces[i] = *swept;
-                    compressPiece(i, MVector(-1.0, -1.0));
-                    computeFreeRectangles(swept->getBoundingBox2D());
-                    eliminateNonMaximal();
-                    movement = true;
-                    goto next_piece;
+                    if (auto swept = sweep(container, candidate, i)) {
+                        freeRectangles.push_back(currentArea.getBoundingBox2D());
+                        placedPieces[i] = *swept;
+                        compressPiece(i, MVector(-1.0, -1.0));
+                        computeFreeRectangles(swept->getBoundingBox2D());
+                        eliminateNonMaximal();
+                        movement = true;
+                        goto next_piece; // Break outer loop and continue with next piece
+                    }
                 }
             }
         }
@@ -474,4 +591,306 @@ std::optional<MArea> Bin::sweep(const MArea& container, MArea inside, size_t ign
     }
 
     return std::nullopt;
+}
+
+bool Bin::verifyNoCollisions() const {
+    bool hasCollisions = false;
+    for (size_t i = 0; i < placedPieces.size(); ++i) {
+        for (size_t j = i + 1; j < placedPieces.size(); ++j) {
+            if (placedPieces[i].intersection(placedPieces[j])) {
+                std::cerr << "Collision detected between pieces " << i << " and " << j << std::endl;
+                Rectangle2D bb1 = placedPieces[i].getBoundingBox2D();
+                Rectangle2D bb2 = placedPieces[j].getBoundingBox2D();
+                std::cerr << "Piece " << i << " position: ("
+                          << RectangleUtils::getX(bb1) << ", " << RectangleUtils::getY(bb1) << ") - ("
+                          << RectangleUtils::getMaxX(bb1) << ", " << RectangleUtils::getMaxY(bb1) << ")" << std::endl;
+                std::cerr << "Piece " << j << " position: ("
+                          << RectangleUtils::getX(bb2) << ", " << RectangleUtils::getY(bb2) << ") - ("
+                          << RectangleUtils::getMaxX(bb2) << ", " << RectangleUtils::getMaxY(bb2) << ")" << std::endl;
+                hasCollisions = true;
+            }
+        }
+    }
+    return !hasCollisions;
+}
+
+void Bin::recomputeAllFreeRectangles() {
+    // Clear existing free rectangles
+    freeRectangles.clear();
+    
+    // Start with the entire bin as a free rectangle
+    freeRectangles.push_back(dimension);
+    
+    // Subtract all placed pieces from the free space
+    for (const auto& piece : placedPieces) {
+        Rectangle2D pieceBB = piece.getBoundingBox2D();
+        computeFreeRectangles(pieceBB);
+    }
+    
+    // Eliminate non-maximal rectangles
+    eliminateNonMaximal();
+    
+    // Reduced verbosity for better performance
+    // std::cerr << "recomputeAllFreeRectangles: Rebuilt free rectangles for bin with "
+    //           << placedPieces.size() << " pieces. New free rectangles count: "
+    //           << freeRectangles.size() << std::endl;
+}
+
+// Look-ahead and backtracking implementation
+Bin::BinState Bin::saveState() const {
+    BinState state;
+    state.placedPieces = placedPieces;
+    state.freeRectangles = freeRectangles;
+    state.placedPiecesRTree = placedPiecesRTree;
+    return state;
+}
+
+void Bin::restoreState(const BinState& state) {
+    placedPieces = state.placedPieces;
+    freeRectangles = state.freeRectangles;
+    placedPiecesRTree = state.placedPiecesRTree;
+}
+
+double Bin::evaluateBinUtilization() const {
+    double binArea = RectangleUtils::getWidth(dimension) * RectangleUtils::getHeight(dimension);
+    double occupiedArea = getOccupiedArea();
+    return occupiedArea / binArea; // Utilization ratio (0.0 to 1.0)
+}
+
+Bin::PlacementResult Bin::tryPlacePiece(const MArea& piece, bool useParallel) {
+    BinState originalState = saveState();
+    Placement placement = findWhereToPlace(piece, useParallel);
+    
+    if (placement.rectIndex != -1) {
+        const Rectangle2D& freeRect = freeRectangles[placement.rectIndex];
+        MArea placedPiece = piece;
+        
+        if (placement.rotationAngle > 0) {
+            placedPiece.rotate(static_cast<double>(placement.rotationAngle));
+        }
+        
+        placedPiece.placeInPosition(RectangleUtils::getX(freeRect), RectangleUtils::getY(freeRect));
+        
+        if (!isCollision(placedPiece)) {
+            Rectangle2D pieceBB = placedPiece.getBoundingBox2D();
+            computeFreeRectangles(pieceBB);
+            eliminateNonMaximal();
+            
+            placedPieces.push_back(placedPiece);
+            size_t newIndex = placedPieces.size() - 1;
+            placedPiecesRTree.insert({pieceBB, newIndex});
+            
+            BinState newState = saveState();
+            restoreState(originalState); // Restore original state for evaluation
+            
+            return {true, placedPiece, newState};
+        }
+    }
+    
+    return {false, MArea(), originalState};
+}
+
+std::vector<MArea> Bin::boundingBoxPackingWithLookAhead(std::vector<MArea>& piecesToPlace, bool useParallel, int lookAheadDepth) {
+    std::vector<MArea> notPlacedPieces;
+    
+    // Sort pieces by area (largest first)
+    std::sort(piecesToPlace.begin(), piecesToPlace.end(), [](const MArea& a, const MArea& b) {
+        return a.getArea() > b.getArea();
+    });
+    
+    while (!piecesToPlace.empty()) {
+        BinState originalState = saveState();
+        double bestUtilization = evaluateBinUtilization();
+        std::vector<MArea> bestPlacementOrder;
+        BinState bestState = originalState;
+        
+        // Get the next few pieces for look-ahead (up to lookAheadDepth or remaining pieces)
+        size_t lookAheadCount = std::min(static_cast<size_t>(lookAheadDepth), piecesToPlace.size());
+        std::vector<MArea> lookAheadPieces(piecesToPlace.begin(), piecesToPlace.begin() + lookAheadCount);
+        
+        // Try all permutations of the look-ahead pieces
+        // Sort by area for permutation generation
+        std::sort(lookAheadPieces.begin(), lookAheadPieces.end(), [](const MArea& a, const MArea& b) {
+            return a.getArea() > b.getArea();
+        });
+        do {
+            BinState currentState = originalState;
+            restoreState(originalState);
+            
+            std::vector<MArea> placedInThisOrder;
+            bool allPlaced = true;
+            
+            // Try to place all pieces in this order
+            for (const auto& piece : lookAheadPieces) {
+                auto result = tryPlacePiece(piece, useParallel);
+                if (result.success) {
+                    placedInThisOrder.push_back(result.placedPiece);
+                    restoreState(result.newState);
+                    currentState = result.newState;
+                } else {
+                    allPlaced = false;
+                    break;
+                }
+            }
+            
+            if (allPlaced) {
+                double currentUtilization = evaluateBinUtilization();
+                if (currentUtilization > bestUtilization) {
+                    bestUtilization = currentUtilization;
+                    bestPlacementOrder = placedInThisOrder;
+                    bestState = currentState;
+                }
+            }
+            
+            restoreState(originalState);
+            
+        } while (std::next_permutation(lookAheadPieces.begin(), lookAheadPieces.end(),
+            [](const MArea& a, const MArea& b) { return a.getArea() > b.getArea(); }));
+        
+        // Apply the best found placement
+        if (!bestPlacementOrder.empty()) {
+            restoreState(bestState);
+            
+            // Remove the placed pieces from the toPlace list
+            for (const auto& placedPiece : bestPlacementOrder) {
+                auto it = std::find_if(piecesToPlace.begin(), piecesToPlace.end(),
+                    [&placedPiece](const MArea& p) {
+                        return std::abs(p.getArea() - placedPiece.getArea()) < 1e-9;
+                    });
+                if (it != piecesToPlace.end()) {
+                    piecesToPlace.erase(it);
+                }
+            }
+        } else {
+            // Fallback to greedy placement if no better order found
+            auto piece = piecesToPlace.front();
+            Placement placement = findWhereToPlace(piece, useParallel);
+            
+            if (placement.rectIndex != -1) {
+                const Rectangle2D& freeRect = freeRectangles[placement.rectIndex];
+                MArea placedPiece = piece;
+                
+                if (placement.rotationAngle > 0) {
+                    placedPiece.rotate(static_cast<double>(placement.rotationAngle));
+                }
+                
+                placedPiece.placeInPosition(RectangleUtils::getX(freeRect), RectangleUtils::getY(freeRect));
+                
+                if (!isCollision(placedPiece)) {
+                    Rectangle2D pieceBB = placedPiece.getBoundingBox2D();
+                    computeFreeRectangles(pieceBB);
+                    eliminateNonMaximal();
+                    
+                    placedPieces.push_back(placedPiece);
+                    size_t newIndex = placedPieces.size() - 1;
+                    placedPiecesRTree.insert({pieceBB, newIndex});
+                    
+                    piecesToPlace.erase(piecesToPlace.begin());
+                } else {
+                    notPlacedPieces.push_back(piece);
+                    piecesToPlace.erase(piecesToPlace.begin());
+                }
+            } else {
+                notPlacedPieces.push_back(piece);
+                piecesToPlace.erase(piecesToPlace.begin());
+            }
+        }
+    }
+    
+    return notPlacedPieces;
+}
+
+std::vector<MArea> Bin::placeInFreeZonesWithLookAhead(std::vector<MArea>& piecesToPlace, bool useParallel, int lookAheadDepth) {
+    std::vector<MArea> notPlacedPieces;
+    
+    // Sort pieces by area (largest first)
+    std::sort(piecesToPlace.begin(), piecesToPlace.end(), [](const MArea& a, const MArea& b) {
+        return a.getArea() > b.getArea();
+    });
+    
+    while (!piecesToPlace.empty()) {
+        BinState originalState = saveState();
+        double bestUtilization = evaluateBinUtilization();
+        std::vector<MArea> bestPlacementOrder;
+        BinState bestState = originalState;
+        
+        // Get the next few pieces for look-ahead (up to lookAheadDepth or remaining pieces)
+        size_t lookAheadCount = std::min(static_cast<size_t>(lookAheadDepth), piecesToPlace.size());
+        std::vector<MArea> lookAheadPieces(piecesToPlace.begin(), piecesToPlace.begin() + lookAheadCount);
+        
+        // Try all permutations of the look-ahead pieces
+        // Sort by area for permutation generation
+        std::sort(lookAheadPieces.begin(), lookAheadPieces.end(), [](const MArea& a, const MArea& b) {
+            return a.getArea() > b.getArea();
+        });
+        do {
+            BinState currentState = originalState;
+            restoreState(originalState);
+            
+            std::vector<MArea> placedInThisOrder;
+            bool allPlaced = true;
+            
+            // Try to place all pieces in this order using free zone placement
+            for (const auto& piece : lookAheadPieces) {
+                // Create a temporary vector with just this piece for free zone placement
+                std::vector<MArea> tempVec = {piece};
+                auto result = placeInFreeZones(tempVec, useParallel);
+                
+                if (result.empty()) {
+                    // Piece was placed successfully
+                    placedInThisOrder.push_back(piece);
+                    currentState = saveState();
+                } else {
+                    allPlaced = false;
+                    break;
+                }
+            }
+            
+            if (allPlaced) {
+                double currentUtilization = evaluateBinUtilization();
+                if (currentUtilization > bestUtilization) {
+                    bestUtilization = currentUtilization;
+                    bestPlacementOrder = placedInThisOrder;
+                    bestState = currentState;
+                }
+            }
+            
+            restoreState(originalState);
+            
+        } while (std::next_permutation(lookAheadPieces.begin(), lookAheadPieces.end(),
+            [](const MArea& a, const MArea& b) { return a.getArea() > b.getArea(); }));
+        
+        // Apply the best found placement
+        if (!bestPlacementOrder.empty()) {
+            restoreState(bestState);
+            
+            // Remove the placed pieces from the toPlace list
+            for (const auto& placedPiece : bestPlacementOrder) {
+                auto it = std::find_if(piecesToPlace.begin(), piecesToPlace.end(),
+                    [&placedPiece](const MArea& p) {
+                        return std::abs(p.getArea() - placedPiece.getArea()) < 1e-9;
+                    });
+                if (it != piecesToPlace.end()) {
+                    piecesToPlace.erase(it);
+                }
+            }
+        } else {
+            // Fallback to greedy placement if no better order found
+            auto piece = piecesToPlace.front();
+            
+            // Try to place in free zones using the original method
+            std::vector<MArea> tempVec = {piece};
+            auto result = placeInFreeZones(tempVec, useParallel);
+            
+            if (result.empty()) {
+                // Piece was placed successfully
+                piecesToPlace.erase(piecesToPlace.begin());
+            } else {
+                notPlacedPieces.push_back(piece);
+                piecesToPlace.erase(piecesToPlace.begin());
+            }
+        }
+    }
+    
+    return notPlacedPieces;
 }

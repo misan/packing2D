@@ -60,6 +60,16 @@ public:
     std::vector<MArea> boundingBoxPacking(std::vector<MArea>& piecesToPlace, bool useParallel);
 
     /**
+     * @brief Places pieces inside the bin using look-ahead and backtracking for better utilization.
+     * This enhanced version evaluates multiple placement orders for the next few pieces.
+     * @param piecesToPlace A list of pieces to try and place in the bin. The list will be sorted.
+     * @param useParallel If true, the packing will be done in parallel.
+     * @param lookAheadDepth Number of pieces to consider for look-ahead (default: 5)
+     * @return A vector of pieces that could not be placed.
+     */
+    std::vector<MArea> boundingBoxPackingWithLookAhead(std::vector<MArea>& piecesToPlace, bool useParallel, int lookAheadDepth = 5);
+
+    /**
      * @brief Compress all placed pieces in this bin towards the lower-left corner.
      */
     void compress(bool useParallel);
@@ -73,6 +83,30 @@ public:
     std::vector<MArea> dropPieces(const std::vector<MArea>& piecesToDrop, bool useParallel);
 
     /**
+     * @brief Places the largest possible pending parts into free zones using global free space exploration.
+     * @param piecesToPlace A list of pieces to try and place in the bin.
+     * @param useParallel If true, the packing will be done in parallel.
+     * @return A vector of pieces that could not be placed.
+     */
+    std::vector<MArea> placeInFreeZones(std::vector<MArea>& piecesToPlace, bool useParallel);
+
+    /**
+     * @brief Places pieces in free zones using look-ahead and backtracking for better utilization.
+     * This enhanced version evaluates multiple placement orders for the next few pieces.
+     * @param piecesToPlace A list of pieces to try and place in the bin. The list will be sorted.
+     * @param useParallel If true, the packing will be done in parallel.
+     * @param lookAheadDepth Number of pieces to consider for look-ahead (default: 5)
+     * @return A vector of pieces that could not be placed.
+     */
+    std::vector<MArea> placeInFreeZonesWithLookAhead(std::vector<MArea>& piecesToPlace, bool useParallel, int lookAheadDepth = 5);
+
+    /**
+     * @brief Recomputes all free rectangles from scratch for the entire bin.
+     * This is necessary when pieces have been moved through compression or other operations.
+     */
+    void recomputeAllFreeRectangles();
+
+    /**
      * @brief Tries to place already placed pieces inside other placed pieces.
      * This is the C++ version of the `moveAndReplace` method from the original Java code.
      * @param indexLimit The starting index (from the end) to check for pieces to move.
@@ -82,11 +116,11 @@ public:
 
     /**
      * @brief Represents a potential placement for a piece, telling the caller
-     * which free rectangle to use and if a rotation is needed.
+     * which free rectangle to use and what rotation is needed.
      */
     struct Placement {
         int rectIndex = -1;         // Index in freeRectangles, -1 if no fit found.
-        bool requiresRotation = false; // Whether the piece needs to be rotated 90 degrees.
+        int rotationAngle = 0;      // Rotation angle in degrees (0, 10, 20, ..., 350)
     };
 
     /**
@@ -96,6 +130,12 @@ public:
      * @return A Placement struct with details of the best position.
      */
     Placement findWhereToPlace(const MArea& piece, bool useParallel);
+
+    /**
+     * @brief Verifies that no collisions exist between placed pieces.
+     * @return True if no collisions found, false otherwise.
+     */
+    bool verifyNoCollisions() const;
 
 private:
     // Type definitions for the R-tree.
@@ -108,6 +148,7 @@ private:
     std::vector<MArea> placedPieces;
     std::vector<Rectangle2D> freeRectangles;
     RTree placedPiecesRTree; // The new spatial index
+    std::mutex compressionMutex; // Mutex for compression operations
 
     /**
      * @brief Checks if a given piece collides with any of the already placed pieces.
@@ -168,6 +209,44 @@ private:
      * @return An optional containing the placed piece if successful, otherwise std::nullopt.
      */
     std::optional<MArea> sweep(const MArea& container, MArea inside, size_t ignoredPieceIndex);
+
+    /**
+     * @brief Saves the current state of the bin for backtracking.
+     * @return A state object that can be used to restore the bin.
+     */
+    struct BinState {
+        std::vector<MArea> placedPieces;
+        std::vector<Rectangle2D> freeRectangles;
+        RTree placedPiecesRTree;
+    };
+    
+    BinState saveState() const;
+    
+    /**
+     * @brief Restores the bin to a previously saved state.
+     * @param state The state to restore.
+     */
+    void restoreState(const BinState& state);
+
+    /**
+     * @brief Evaluates the quality of the current bin configuration.
+     * @return A score representing the bin utilization (higher is better).
+     */
+    double evaluateBinUtilization() const;
+
+    /**
+     * @brief Tries to place a single piece and returns the resulting state.
+     * @param piece The piece to place.
+     * @param useParallel If true, use parallel processing.
+     * @return The placement result and new state if successful.
+     */
+    struct PlacementResult {
+        bool success;
+        MArea placedPiece;
+        BinState newState;
+    };
+    
+    PlacementResult tryPlacePiece(const MArea& piece, bool useParallel);
 };
 
 namespace TestUtils {
