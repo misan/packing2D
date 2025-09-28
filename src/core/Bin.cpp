@@ -368,12 +368,12 @@ std::optional<MArea> Bin::dive(MArea toDive, bool useParallel) {
 
     for (double initialX = 0; initialX + pieceWidth <= binWidth + 1e-9; initialX += dx) {
         MArea tempPiece = toDive;
-        tempPiece.placeInPosition(initialX, binHeight - pieceHeight);
+        tempPiece.placeInPosition(initialX, 0);
 
         if (!isCollision(tempPiece)) {
             size_t tempIndex = placedPieces.size();
             placedPieces.push_back(tempPiece);
-            compressPiece(tempIndex, MVector(0, -1.0));
+            compressPiece(tempIndex, MVector(0, 1.0));
             MArea finalPiece = placedPieces.back();
             placedPieces.pop_back();
             return finalPiece;
@@ -381,11 +381,11 @@ std::optional<MArea> Bin::dive(MArea toDive, bool useParallel) {
     }
     
     MArea tempPiece = toDive;
-    tempPiece.placeInPosition(binWidth - pieceWidth, binHeight - pieceHeight);
+    tempPiece.placeInPosition(binWidth - pieceWidth, 0);
     if (!isCollision(tempPiece)) {
         size_t tempIndex = placedPieces.size();
         placedPieces.push_back(tempPiece);
-        compressPiece(tempIndex, MVector(0, -1.0));
+        compressPiece(tempIndex, MVector(0, 1.0));
         MArea finalPiece = placedPieces.back();
         placedPieces.pop_back();
         return finalPiece;

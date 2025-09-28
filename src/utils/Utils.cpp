@@ -65,7 +65,7 @@ std::optional<LoadResult> loadPieces(const std::string& fileName) {
                     std::cerr << "Error: Malformed point string '" << pointStr << "'" << std::endl;
                     return std::nullopt;
                 }
-                holePoints.emplace_back(std::stod(coords[0]), std::stod(coords[1]));
+                holePoints.emplace_back(std::stod(coords[0]), -std::stod(coords[1]));
             }
 
             MArea& outerPiece = result.pieces.back();
@@ -89,7 +89,7 @@ std::optional<LoadResult> loadPieces(const std::string& fileName) {
                     std::cerr << "Error: Malformed point string '" << pointStr << "'" << std::endl;
                     return std::nullopt;
                 }
-                MPointDouble p(std::stod(coords[0]), std::stod(coords[1]));
+                MPointDouble p(std::stod(coords[0]), -std::stod(coords[1]));
                 if (uniquePoints.find(p) == uniquePoints.end()) {
                     uniquePoints.insert(p);
                     points.push_back(p);
