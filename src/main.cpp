@@ -10,6 +10,7 @@
 
 // Forward declaration for helper functions
 void createOutputFiles(const std::vector<Bin>& bins);
+void createExtendedOutputFile(const std::vector<Bin>& bins);
 void printUsage();
 
 int main(int argc, char* argv[]) {
@@ -20,11 +21,14 @@ int main(int argc, char* argv[]) {
 
     std::vector<std::string> args(argv + 1, argv + argc);
     bool useParallel = false;
+    bool extendedOutput = false;
     std::string fileName;
 
     for (const auto& arg : args) {
         if (arg == "--parallel") {
             useParallel = true;
+        } else if (arg == "-x") {
+            extendedOutput = true;
         } else {
             fileName = arg;
         }
@@ -62,8 +66,13 @@ int main(int argc, char* argv[]) {
     std::cout << "Packing process finished. " << bins.size() << " bins used." << std::endl;
     std::cout << "Elapsed time: " << elapsed.count() << " seconds." << std::endl;
 
-    std::cout << "Generating output files..." << std::endl;
-    createOutputFiles(bins);
+    if (extendedOutput) {
+        std::cout << "Generating extended output file..." << std::endl;
+        createExtendedOutputFile(bins);
+    } else {
+        std::cout << "Generating output files..." << std::endl;
+        createOutputFiles(bins);
+    }
 
     std::cout << "DONE!!!" << std::endl;
 
@@ -93,12 +102,35 @@ void createOutputFiles(const std::vector<Bin>& bins) {
     }
 }
 
+void createExtendedOutputFile(const std::vector<Bin>& bins) {
+    std::ofstream outFile("posiciones.txt");
+    if (!outFile.is_open()) {
+        std::cerr << "Error: Could not create output file posiciones.txt" << std::endl;
+        return;
+    }
+
+    for (const auto& bin : bins) {
+        const auto& placedPieces = bin.getPlacedPieces();
+        outFile << placedPieces.size() << std::endl;
+        for (const auto& piece : placedPieces) {
+            Rectangle2D bbox = piece.getBoundingBox2D();
+            outFile << piece.getID() << " "
+                    << (360.0 - piece.getRotation()) << " "
+                    << RectangleUtils::getX(bbox) << " " << RectangleUtils::getY(bbox)
+                    << std::endl;
+        }
+    }
+    std::cout << "Generated extended output file 'posiciones.txt'" << std::endl;
+}
+
 void printUsage() {
     std::cout << std::endl;
     std::cout << "Usage:" << std::endl;
     std::cout << std::endl;
-    std::cout << "$ ./packing_main [--parallel] <file name>" << std::endl;
+    std::cout << "$ ./packing_main [--parallel] [-x] <file name>" << std::endl;
+    
     std::cout << "  --parallel : (Optional) Run the packing algorithm using a parallel implementation." << std::endl;
+    std::cout << "  -x         : (Optional) Generate a single 'posiciones.txt' output file instead of one file per bin." << std::endl;
     std::cout << "  <file name>: file describing pieces (see file structure specifications below)." << std::endl;
     std::cout << std::endl;
     std::cout << "The input pieces file should be structured as follows: " << std::endl;
